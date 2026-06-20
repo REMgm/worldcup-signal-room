@@ -21,13 +21,22 @@ function setStatus(text, mode = "") {
   node.dataset.mode = mode;
 }
 
-async function getJson(url) {
-  const response = await fetch(`${API_BASE}${url}`);
+async function getJson(url, options = {}) {
+  const requestUrl = withRefresh(url, options.refreshToken);
+  const response = await fetch(`${API_BASE}${requestUrl}`, {
+    cache: options.refreshToken ? "no-store" : "default"
+  });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw new Error(body.error || `Request failed ${response.status}`);
   }
   return response.json();
+}
+
+function withRefresh(url, refreshToken) {
+  if (!refreshToken) return url;
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}refresh=${encodeURIComponent(refreshToken)}`;
 }
 
 function escapeHtml(value) {
@@ -67,6 +76,37 @@ function formatGMT(value) {
 
 function matchGmtLabel(match) {
   return match?.gmt?.label || (match?.summary?.date ? formatGMT(match.summary.date) : "TBD GMT");
+}
+
+function matchSignature(match) {
+  return [match?.home, match?.away, match?.localDate || match?.summary?.date || ""]
+    .filter(Boolean)
+    .join("|")
+    .toLowerCase();
+}
+
+function captureSelection() {
+  const favoriteSelect = $("#favoriteTeamSelect");
+  const matchSelect = $("#todayMatchSelect");
+  const matchOption = matchSelect?.selectedOptions?.[0];
+  return {
+    favoriteTeam: favoriteSelect?.value || state.teamRoom?.team || "",
+    matchValue: matchOption?.value || state.matchRoom?.match?.eventId || "",
+    matchSignature: matchOption?.dataset?.signature || matchSignature(state.matchRoom?.match)
+  };
+}
+
+function selectPreferredOption(select, preferredValue, preferredSignature = "") {
+  const options = [...select.options];
+  const exactValueIsStable = preferredValue && !String(preferredValue).startsWith("index-");
+  const target = (exactValueIsStable ? options.find((option) => option.value === preferredValue) : null)
+    || options.find((option) => preferredSignature && option.dataset.signature === preferredSignature)
+    || options.find((option) => option.value === preferredValue);
+  if (target) {
+    select.value = target.value;
+  } else if (options.length) {
+    select.selectedIndex = 0;
+  }
 }
 
 function switchView(id) {
@@ -111,7 +151,7 @@ function renderSourceTicker() {
   ticker.textContent = `${connected} connected feeds · ${fixtureCount} GitHub fixtures · ${daySources} signal sources · ${locked} credential gates${bdlText}`;
 }
 
-function renderControls() {
+function renderControls(selection = {}) {
   const teams = state.signalDay?.teams || [];
   const matches = state.signalDay?.matches || [];
   const favoriteSelect = $("#favoriteTeamSelect");
@@ -123,14 +163,17 @@ function renderControls() {
     option.textContent = team;
     return option;
   }));
+  selectPreferredOption(favoriteSelect, selection.favoriteTeam);
 
   matchSelect.replaceChildren(...matches.map((match, index) => {
     const option = document.createElement("option");
     option.value = match.eventId || `index-${index}`;
     option.dataset.index = index;
+    option.dataset.signature = matchSignature(match);
     option.textContent = `${match.home} vs ${match.away} · ${matchGmtLabel(match)}`;
     return option;
   }));
+  selectPreferredOption(matchSelect, selection.matchValue, selection.matchSignature);
 }
 
 function renderFixtures() {
@@ -587,76 +630,91 @@ function renderMatchDetails(data) {
   renderMomentumChart(data);
 }
 
-async function loadWorldcup26() {
-  state.worldcup26 = await getJson("/api/worldcup26");
+async function loadWorldcup26(options = {}) {
+  state.worldcup26 = await getJson("/api/worldcup26", options);
   renderMetrics();
   renderFixtures();
   renderSourceTicker();
 }
 
-async function loadSources() {
-  state.sources = await getJson("/api/sources");
+async function loadSources(options = {}) {
+  state.sources = await getJson("/api/sources", options);
   renderMetrics();
   renderSources();
   renderSourceTicker();
 }
 
-async function loadSignalDay() {
-  state.signalDay = await getJson(`/api/signal-day?date=${DEFAULT_DATE}`);
-  renderControls();
+async function loadSignalDay(options = {}) {
+  state.signalDay = await getJson(`/api/signal-day?date=${DEFAULT_DATE}`, options);
+  renderControls(options.selection);
   renderTodayMatches();
   renderMetrics();
   renderSourceTicker();
 }
 
-async function loadTeamRoom() {
+async function loadTeamRoom(options = {}) {
   const team = $("#favoriteTeamSelect").value || state.signalDay?.teams?.[0];
   if (!team) return;
-  state.teamRoom = await getJson(`/api/team-room?date=${DEFAULT_DATE}&team=${encodeURIComponent(team)}`);
+  state.teamRoom = await getJson(`/api/team-room?date=${DEFAULT_DATE}&team=${encodeURIComponent(team)}`, options);
   renderTeamRoom(state.teamRoom);
 }
 
-async function loadMatchRoom() {
+async function loadMatchRoom(options = {}) {
   const selected = $("#todayMatchSelect").selectedOptions[0];
   const eventId = selected?.value?.startsWith("index-") ? "" : selected?.value || "";
-  state.matchRoom = await getJson(`/api/match-room?date=${DEFAULT_DATE}${eventId ? `&eventId=${encodeURIComponent(eventId)}` : ""}`);
+  state.matchRoom = await getJson(`/api/match-room?date=${DEFAULT_DATE}${eventId ? `&eventId=${encodeURIComponent(eventId)}` : ""}`, options);
   renderMatchRoom(state.matchRoom);
 }
 
-async function loadCompetitions() {
-  const result = await getJson("/api/statsbomb/competitions");
+async function loadCompetitions(options = {}) {
+  const result = await getJson("/api/statsbomb/competitions", options);
   state.competitions = result.competitions;
   renderCompetitions();
 }
 
-async function loadMatches() {
+async function loadMatches(options = {}) {
   const selected = $("#competitionSelect").selectedOptions[0];
   if (!selected) return;
-  const result = await getJson(`/api/statsbomb/matches?competition_id=${selected.dataset.competitionId}&season_id=${selected.dataset.seasonId}`);
+  const result = await getJson(`/api/statsbomb/matches?competition_id=${selected.dataset.competitionId}&season_id=${selected.dataset.seasonId}`, options);
   state.matches = result.matches;
   renderMatches();
-  await loadActiveMatch();
+  await loadActiveMatch(options);
 }
 
-async function loadActiveMatch() {
+async function loadActiveMatch(options = {}) {
   const selected = $("#matchSelect").selectedOptions[0];
   if (!selected) return;
   $("#matchPullStatus").textContent = "Pulling";
-  const data = await getJson(`/api/statsbomb/match/${selected.value}?match=${selected.dataset.match}`);
+  const data = await getJson(`/api/statsbomb/match/${selected.value}?match=${selected.dataset.match}`, options);
   state.activeMatch = data;
   renderMatchDetails(data);
 }
 
-async function loadImages() {
-  const result = await getJson("/api/momentum-images");
+async function loadImages(options = {}) {
+  const result = await getJson("/api/momentum-images", options);
   renderImages(result.images);
 }
 
-async function refreshAll() {
+async function refreshAll(options = {}) {
   try {
-    setStatus("Refreshing");
-    await Promise.all([loadSources(), loadWorldcup26(), loadCompetitions(), loadImages(), loadSignalDay()]);
-    await Promise.all([loadMatches(), loadTeamRoom(), loadMatchRoom()]);
+    const selection = captureSelection();
+    const refreshToken = options.force ? String(Date.now()) : "";
+    const requestOptions = { refreshToken };
+    const refreshButton = $("#refreshButton");
+    refreshButton.disabled = true;
+    setStatus(options.force ? "Pulling latest" : "Refreshing");
+    await Promise.all([
+      loadSources(requestOptions),
+      loadWorldcup26(requestOptions),
+      loadCompetitions(requestOptions),
+      loadImages(requestOptions),
+      loadSignalDay({ ...requestOptions, selection })
+    ]);
+    await Promise.all([
+      loadMatches(requestOptions),
+      loadTeamRoom(requestOptions),
+      loadMatchRoom(requestOptions)
+    ]);
     setStatus("Live");
   } catch (error) {
     console.error(error);
@@ -666,6 +724,8 @@ async function refreshAll() {
     node.className = "error";
     node.textContent = error.message;
     activeView.prepend(node);
+  } finally {
+    $("#refreshButton").disabled = false;
   }
 }
 
@@ -686,7 +746,7 @@ function bindEvents() {
     await loadMatchRoom();
     switchView("match-room");
   });
-  $("#refreshButton").addEventListener("click", refreshAll);
+  $("#refreshButton").addEventListener("click", () => refreshAll({ force: true }));
 }
 
 bindEvents();

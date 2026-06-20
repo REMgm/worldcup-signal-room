@@ -8,6 +8,7 @@ const ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const PUBLIC_DIR = join(ROOT, "public");
 const SQUADS_PATH = join(ROOT, "data", "squads-2026.json");
 const REZA_REPO_DIR = join(ROOT, "data", "worldcup-source");
+const REZA_RAW_BASE = "https://raw.githubusercontent.com/rezarahiminia/worldcup2026/main";
 const STATSBOMB_BASE = "https://raw.githubusercontent.com/statsbomb/open-data/master/data";
 const WORLDCUP26_BASE = "https://worldcup26.ir/get";
 const OPENFOOTBALL_2026 = "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json";
@@ -415,16 +416,25 @@ async function readJsonFile(path) {
   return JSON.parse(await readFile(path, "utf8"));
 }
 
+async function readWorldcupSourceFile(filename) {
+  try {
+    const result = await fetchJson(`${REZA_RAW_BASE}/${filename}`, { ttl: CACHE_MS });
+    return result.data;
+  } catch {
+    return readJsonFile(join(REZA_REPO_DIR, filename));
+  }
+}
+
 async function getWorldcupRepoData() {
   const key = "local:rezarahiminia-worldcup2026";
   const cached = cache.get(key);
   if (cached && Date.now() - cached.at < CACHE_MS) return cached.value;
 
   const [matches, teams, stadiums, groups, openFootball] = await Promise.all([
-    readJsonFile(join(REZA_REPO_DIR, "football.matches.json")),
-    readJsonFile(join(REZA_REPO_DIR, "football.teams.json")),
-    readJsonFile(join(REZA_REPO_DIR, "football.stadiums.json")),
-    readJsonFile(join(REZA_REPO_DIR, "football.matchtables.json")),
+    readWorldcupSourceFile("football.matches.json"),
+    readWorldcupSourceFile("football.teams.json"),
+    readWorldcupSourceFile("football.stadiums.json"),
+    readWorldcupSourceFile("football.matchtables.json"),
     fetchJson(OPENFOOTBALL_2026, { ttl: CACHE_MS }).catch(() => ({ data: { matches: [] } }))
   ]);
 
@@ -992,6 +1002,10 @@ async function getBallDontLieOverview() {
 
 async function handleApi(req, res, url) {
   try {
+    if (url.searchParams.has("refresh")) {
+      cache.clear();
+    }
+
     if (url.pathname === "/api/sources") {
       const [competitions, worldcupRepo, squads, espnProbe, bdl, footballData] = await Promise.all([
         fetchJson(`${STATSBOMB_BASE}/competitions.json`, { ttl: CACHE_MS }),
