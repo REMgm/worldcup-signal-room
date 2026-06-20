@@ -420,16 +420,16 @@ function renderTeamRoom(data) {
   renderNews(data.news, "#teamNews");
 }
 
-function renderPrediction(prediction) {
+function renderPrediction(prediction, match = {}) {
   if (!prediction?.probabilities) {
     $("#predictionChart").innerHTML = `<div class="empty">No blended prediction available yet.</div>`;
     return;
   }
   const probs = prediction.probabilities;
   const items = [
-    { label: "Home", value: probs.home, display: `${probs.home}%` },
+    { label: match.home || "Home", value: probs.home, display: `${probs.home}%` },
     { label: "Draw", value: probs.draw, display: `${probs.draw}%` },
-    { label: "Away", value: probs.away, display: `${probs.away}%` }
+    { label: match.away || "Away", value: probs.away, display: `${probs.away}%` }
   ];
   $("#predictionChart").innerHTML = `
     <div class="probability-rings">
@@ -481,6 +481,7 @@ function renderComparison(data) {
 function renderMatchRoom(data) {
   const match = data.match || {};
   const summary = match.summary || {};
+  const score = data.prediction?.scorePrediction;
   $("#matchRoomHero").innerHTML = `
     <div class="match-side">
       ${summary.home?.logo ? `<img src="${escapeHtml(summary.home.logo)}" alt="">` : ""}
@@ -490,6 +491,13 @@ function renderMatchRoom(data) {
     <div class="match-center">
       <p class="eyebrow">Match Deep Dive</p>
       <strong>${escapeHtml(matchGmtLabel(match))}</strong>
+      ${score ? `
+        <div class="score-prediction">
+          <span>Score Prediction</span>
+          <b>${escapeHtml(score.label)}</b>
+          <small>May change as confidence grows throughout the game</small>
+        </div>
+      ` : ""}
       <span>${escapeHtml(summary.venue || match.githubMatch?.stadium_name || "")}</span>
       <small>${escapeHtml((summary.broadcasts || []).join(" · ") || "Broadcast TBA")}</small>
     </div>
@@ -500,7 +508,7 @@ function renderMatchRoom(data) {
     </div>
   `;
 
-  renderPrediction(data.prediction);
+  renderPrediction(data.prediction, match);
   renderComparison(data);
   $("#uncommonInsights").innerHTML = (data.uncommonInsights || []).length
     ? data.uncommonInsights.map((item) => `<article>${escapeHtml(item)}</article>`).join("")

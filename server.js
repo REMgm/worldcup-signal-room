@@ -355,6 +355,42 @@ function scaleExpertWeight(weights, scale) {
   };
 }
 
+function scorePrediction(match, probabilities, summary, confidence) {
+  const totalGoals = clamp(Number(summary?.odds?.overUnder || 2.5), 1.5, 4.5);
+  const homeWin = Number(probabilities.home || 0);
+  const awayWin = Number(probabilities.away || 0);
+  const draw = Number(probabilities.draw || 0);
+  const edge = clamp((homeWin - awayWin) / 100, -0.58, 0.58);
+  const confidenceBoost = clamp(Number(confidence || 0) / 100, 0, 0.5);
+  let homeXg = totalGoals * clamp(0.5 + edge * 0.55 + confidenceBoost * Math.sign(edge) * 0.05, 0.22, 0.78);
+  let awayXg = Math.max(0.15, totalGoals - homeXg);
+  let homeGoals = clamp(Math.round(homeXg), 0, 5);
+  let awayGoals = clamp(Math.round(awayXg), 0, 5);
+  const winner = homeWin >= awayWin && homeWin >= draw ? "home" : awayWin >= draw ? "away" : "draw";
+
+  if (winner === "home" && homeGoals <= awayGoals) homeGoals = Math.min(5, awayGoals + 1);
+  if (winner === "away" && awayGoals <= homeGoals) awayGoals = Math.min(5, homeGoals + 1);
+  if (winner === "draw") {
+    const drawGoals = totalGoals < 2.1 ? 0 : 1;
+    homeGoals = drawGoals;
+    awayGoals = drawGoals;
+  }
+
+  return {
+    label: `${match.home} ${homeGoals}-${awayGoals} ${match.away}`,
+    shortLabel: `${homeGoals}-${awayGoals}`,
+    homeGoals,
+    awayGoals,
+    expectedGoals: {
+      home: Number(homeXg.toFixed(2)),
+      away: Number(awayXg.toFixed(2)),
+      total: Number((homeXg + awayXg).toFixed(2))
+    },
+    basis: "Blended win probability, total-goals market, live tournament signal",
+    volatility: confidence >= 28 ? "medium" : "high"
+  };
+}
+
 function buildPredictionModel(match, homeProfile, awayProfile, summary, expertSignal = null) {
   const homeHistorical = squadPower(homeProfile);
   const awayHistorical = squadPower(awayProfile);
@@ -384,6 +420,7 @@ function buildPredictionModel(match, homeProfile, awayProfile, summary, expertSi
         ? match.away
         : "Draw";
   const confidence = clamp(Math.max(probabilities.home, probabilities.draw, probabilities.away) - 33.3, 0, 66.7);
+  const score = scorePrediction(match, probabilities, summary, confidence);
   const edges = [];
   const capsGap = Number(Math.abs((homeProfile?.averageCaps || 0) - (awayProfile?.averageCaps || 0)).toFixed(1));
   if (capsGap >= 5) {
@@ -410,6 +447,7 @@ function buildPredictionModel(match, homeProfile, awayProfile, summary, expertSi
     favorite,
     confidence: Number(confidence.toFixed(1)),
     probabilities,
+    scorePrediction: score,
     components: {
       marketOdds: summary?.odds?.probabilities || null,
       historicalSquad: {

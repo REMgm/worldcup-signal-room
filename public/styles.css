@@ -875,6 +875,41 @@ tbody tr:hover {
   font-size: 0.72rem;
   text-transform: uppercase;
   font-weight: 900;
+  line-height: 1.05;
+  max-width: 78%;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.score-prediction {
+  display: grid;
+  gap: 5px;
+  width: min(100%, 340px);
+  border: 1px solid rgba(241, 184, 50, 0.42);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  background:
+    linear-gradient(135deg, rgba(241, 184, 50, 0.18), transparent 45%),
+    rgba(11, 13, 10, 0.54);
+}
+
+.score-prediction span,
+.score-prediction small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.score-prediction b {
+  color: var(--text);
+  font-size: clamp(1rem, 2vw, 1.35rem);
+  line-height: 1.05;
+}
+
+.score-prediction small {
+  line-height: 1.2;
+  text-transform: none;
 }
 
 .odds-strip {
