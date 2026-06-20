@@ -10,6 +10,8 @@ dashboard_*.png
 build_*.py
 repo_summary.md
 worldcup2026_signal_room.html
+worldcup2026_signal_room_enhanced.html
+worldcup-signal-room/
 apifootball_*.json
 footballdata_test.json
 games.json

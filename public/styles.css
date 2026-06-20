@@ -697,7 +697,7 @@ tbody tr:hover {
 
 .deep-grid {
   display: grid;
-  grid-template-columns: minmax(260px, 0.75fr) minmax(320px, 1fr) minmax(280px, 0.85fr);
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 14px;
   margin-bottom: 14px;
 }
@@ -720,6 +720,7 @@ tbody tr:hover {
 .chart-stack,
 .comparison-bars,
 .prediction-chart,
+.expert-notes,
 .insight-list,
 .news-list,
 .player-grid {
@@ -885,7 +886,7 @@ tbody tr:hover {
 
 .model-sources {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 8px;
   margin-top: 12px;
 }
@@ -913,6 +914,87 @@ tbody tr:hover {
   padding: 8px 10px;
   color: var(--muted);
   background: rgba(255, 255, 255, 0.05);
+  font-size: 0.82rem;
+}
+
+.expert-notes {
+  display: grid;
+  gap: 12px;
+}
+
+.expert-summary {
+  display: grid;
+  gap: 5px;
+  border: 1px solid rgba(241, 184, 50, 0.36);
+  border-radius: var(--radius);
+  padding: 12px;
+  background:
+    linear-gradient(135deg, rgba(241, 184, 50, 0.16), transparent 44%),
+    #10120e;
+}
+
+.expert-summary span,
+.expert-summary b {
+  text-transform: uppercase;
+}
+
+.expert-summary span {
+  color: var(--away);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.expert-summary b {
+  color: var(--text);
+  font-size: 1.08rem;
+}
+
+.expert-summary em {
+  color: var(--muted);
+  font-style: normal;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.expert-note-list {
+  display: grid;
+  gap: 8px;
+}
+
+.expert-note {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--muted);
+  border-radius: var(--radius);
+  padding: 10px;
+  color: var(--text);
+  text-decoration: none;
+  background: #10120e;
+}
+
+.expert-note.home {
+  border-left-color: var(--home);
+}
+
+.expert-note.away {
+  border-left-color: var(--away);
+}
+
+.expert-note span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.expert-note strong {
+  line-height: 1.25;
+}
+
+.expert-note p {
+  margin: 0;
+  color: var(--muted);
   font-size: 0.82rem;
 }
 

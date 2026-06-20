@@ -312,7 +312,50 @@ function blendProbabilities(market, model, marketWeight = 0.62) {
   };
 }
 
-function buildPredictionModel(match, homeProfile, awayProfile, summary) {
+function weightedProbabilities(parts) {
+  const active = parts.filter((part) => part.probabilities && part.weight > 0);
+  const totalWeight = active.reduce((sum, part) => sum + part.weight, 0) || 1;
+  const blended = active.reduce((acc, part) => {
+    acc.home += Number(part.probabilities.home || 0) * part.weight;
+    acc.draw += Number(part.probabilities.draw || 0) * part.weight;
+    acc.away += Number(part.probabilities.away || 0) * part.weight;
+    return acc;
+  }, { home: 0, draw: 0, away: 0 });
+  const total = (blended.home + blended.draw + blended.away) / totalWeight || 1;
+  return {
+    home: Number(((blended.home / totalWeight) / total * 100).toFixed(1)),
+    draw: Number(((blended.draw / totalWeight) / total * 100).toFixed(1)),
+    away: Number(((blended.away / totalWeight) / total * 100).toFixed(1))
+  };
+}
+
+function predictionWeights(hasMarket, hasExpert) {
+  if (hasMarket && hasExpert) {
+    return { market: 0.52, historicalSquad: 0.24, liveTournament: 0.10, expertMedia: 0.14 };
+  }
+  if (hasMarket) {
+    return { market: 0.62, historicalSquad: 0.27, liveTournament: 0.11, expertMedia: 0 };
+  }
+  if (hasExpert) {
+    return { market: 0, historicalSquad: 0.62, liveTournament: 0.22, expertMedia: 0.16 };
+  }
+  return { market: 0, historicalSquad: 0.72, liveTournament: 0.28, expertMedia: 0 };
+}
+
+function scaleExpertWeight(weights, scale) {
+  if (!weights.expertMedia) return weights;
+  const expertMedia = Number((weights.expertMedia * scale).toFixed(3));
+  const released = weights.expertMedia - expertMedia;
+  const base = weights.market + weights.historicalSquad + weights.liveTournament || 1;
+  return {
+    market: Number((weights.market + released * (weights.market / base)).toFixed(3)),
+    historicalSquad: Number((weights.historicalSquad + released * (weights.historicalSquad / base)).toFixed(3)),
+    liveTournament: Number((weights.liveTournament + released * (weights.liveTournament / base)).toFixed(3)),
+    expertMedia
+  };
+}
+
+function buildPredictionModel(match, homeProfile, awayProfile, summary, expertSignal = null) {
   const homeHistorical = squadPower(homeProfile);
   const awayHistorical = squadPower(awayProfile);
   const homeLive = liveTeamPower(summary?.home);
@@ -320,7 +363,20 @@ function buildPredictionModel(match, homeProfile, awayProfile, summary) {
   const homeStrength = homeHistorical * 0.72 + homeLive * 0.28;
   const awayStrength = awayHistorical * 0.72 + awayLive * 0.28;
   const model = modelFromStrength(homeStrength, awayStrength, summary?.odds?.overUnder);
-  const probabilities = blendProbabilities(summary?.odds?.probabilities, model);
+  const historicalModel = modelFromStrength(homeHistorical, awayHistorical, summary?.odds?.overUnder);
+  const liveModel = modelFromStrength(homeLive, awayLive, summary?.odds?.overUnder);
+  const market = summary?.odds?.probabilities || null;
+  const hasExpertNotes = Number(expertSignal?.noteCount || 0) >= 3;
+  const expert = hasExpertNotes ? expertSignal.probabilities : null;
+  const weights = expert && !expertSignal?.usable
+    ? scaleExpertWeight(predictionWeights(Boolean(market), true), 0.45)
+    : predictionWeights(Boolean(market), Boolean(expert));
+  const probabilities = weightedProbabilities([
+    { probabilities: market, weight: weights.market },
+    { probabilities: historicalModel, weight: weights.historicalSquad },
+    { probabilities: liveModel, weight: weights.liveTournament },
+    { probabilities: expert, weight: weights.expertMedia }
+  ]);
   const favorite =
     probabilities.home >= probabilities.away && probabilities.home >= probabilities.draw
       ? match.home
@@ -344,8 +400,13 @@ function buildPredictionModel(match, homeProfile, awayProfile, summary) {
   if (summary?.odds?.probabilities) {
     edges.push(`Live market signal from ${summary.odds.provider || "odds feed"} is blended with squad history and tournament stats.`);
   }
+  if (expertSignal?.usable) {
+    edges.push(`Expert media pulse leans ${expertSignal.leanLabel} from ${expertSignal.noteCount} live notes.`);
+  } else if (expertSignal?.noteCount) {
+    edges.push(`${expertSignal.noteCount} expert-media notes were pulled; neutral sentiment is treated as a smaller uncertainty input.`);
+  }
   return {
-    label: "Signal Room blended model",
+    label: expert ? "Signal Room expert-aware model" : "Signal Room blended model",
     favorite,
     confidence: Number(confidence.toFixed(1)),
     probabilities,
@@ -353,15 +414,31 @@ function buildPredictionModel(match, homeProfile, awayProfile, summary) {
       marketOdds: summary?.odds?.probabilities || null,
       historicalSquad: {
         home: Number(homeHistorical.toFixed(1)),
-        away: Number(awayHistorical.toFixed(1))
+        away: Number(awayHistorical.toFixed(1)),
+        probabilities: {
+          home: Number(historicalModel.home.toFixed(1)),
+          draw: Number(historicalModel.draw.toFixed(1)),
+          away: Number(historicalModel.away.toFixed(1))
+        }
       },
       liveTournament: {
         home: Number(homeLive.toFixed(1)),
-        away: Number(awayLive.toFixed(1))
+        away: Number(awayLive.toFixed(1)),
+        probabilities: {
+          home: Number(liveModel.home.toFixed(1)),
+          draw: Number(liveModel.draw.toFixed(1)),
+          away: Number(liveModel.away.toFixed(1))
+        }
       },
-      weights: summary?.odds?.probabilities
-        ? { market: 0.62, historicalSquad: 0.27, liveTournament: 0.11 }
-        : { market: 0, historicalSquad: 0.72, liveTournament: 0.28 }
+      expertMedia: expertSignal ? {
+        usable: expertSignal.usable,
+        lean: expertSignal.lean,
+        leanLabel: expertSignal.leanLabel,
+        confidence: expertSignal.confidence,
+        probabilities: expertSignal.probabilities,
+        noteCount: expertSignal.noteCount
+      } : null,
+      weights
     },
     edges
   };
@@ -371,6 +448,7 @@ function decodeXml(value) {
   return compact(value)
     .replace(/<!\[CDATA\[(.*?)\]\]>/gs, "$1")
     .replace(/&amp;/g, "&")
+    .replace(/&nbsp;/g, " ")
     .replace(/&quot;/g, "\"")
     .replace(/&#39;/g, "'")
     .replace(/&apos;/g, "'")
@@ -380,7 +458,7 @@ function decodeXml(value) {
 
 function tagValue(item, tag) {
   const match = item.match(new RegExp(`<${tag}(?: [^>]*)?>([\\s\\S]*?)<\\/${tag}>`, "i"));
-  return match ? decodeXml(match[1].replace(/<[^>]*>/g, "")) : "";
+  return match ? compact(decodeXml(match[1]).replace(/<[^>]*>/g, "")) : "";
 }
 
 function parseRssItems(xml, limit = 8) {
@@ -388,6 +466,7 @@ function parseRssItems(xml, limit = 8) {
     .slice(0, limit)
     .map((match) => ({
       title: tagValue(match[1], "title"),
+      description: tagValue(match[1], "description"),
       link: tagValue(match[1], "link"),
       source: tagValue(match[1], "source") || "Google News",
       publishedAt: tagValue(match[1], "pubDate")
@@ -401,6 +480,152 @@ async function fetchGoogleNews(query, limit = 6) {
     { ttl: 1000 * 60 * 12 }
   );
   return parseRssItems(rss.text, limit);
+}
+
+function articleText(item) {
+  return stripMarks(`${item.title || item.headline || ""} ${item.description || ""}`);
+}
+
+function teamNeedles(team) {
+  return [...new Set([stripMarks(team), teamKey(team)])].filter((needle) => needle.length >= 3);
+}
+
+function hasTeam(text, team) {
+  return teamNeedles(team).some((needle) => text.includes(needle));
+}
+
+function sourceWeight(source) {
+  const key = stripMarks(source);
+  if (/espn|bbc|the athletic|guardian|reuters|associated press|ap news|sky sports|cbssports|cbs sports|fox sports|nbc sports|sporting news|goal|fourfourtwo|sports illustrated/.test(key)) return 1.25;
+  return 1;
+}
+
+function teamDirectionalScore(text, team, opponent) {
+  const teamText = stripMarks(team);
+  const opponentText = stripMarks(opponent);
+  const teamKeyText = teamKey(team);
+  const opponentKeyText = teamKey(opponent);
+  const teamPatterns = [teamText, teamKeyText].filter(Boolean);
+  const opponentPatterns = [opponentText, opponentKeyText].filter(Boolean);
+  let score = 0;
+
+  for (const currentTeam of teamPatterns) {
+    for (const currentOpponent of opponentPatterns) {
+      if (text.includes(`${currentTeam} over ${currentOpponent}`)) score += 2.5;
+      if (text.includes(`${currentTeam} to beat ${currentOpponent}`)) score += 2.5;
+      if (text.includes(`${currentTeam} vs ${currentOpponent} pick`)) score += 0.7;
+      if (text.includes(`${currentTeam} ${currentOpponent} prediction`)) score += 0.5;
+    }
+    if (text.includes(`${currentTeam} to win`)) score += 2.4;
+    if (text.includes(`${currentTeam} win`)) score += 1.4;
+    if (text.includes(`${currentTeam} favored`) || text.includes(`${currentTeam} favourite`) || text.includes(`${currentTeam} favorite`)) score += 1.8;
+    if (text.includes(`back ${currentTeam}`) || text.includes(`lean ${currentTeam}`) || text.includes(`pick ${currentTeam}`)) score += 1.8;
+    if (text.includes(`${currentTeam} edge`) || text.includes(`${currentTeam} advantage`)) score += 1.2;
+    if (text.includes(`${currentTeam} upset`)) score += 1.2;
+  }
+
+  return score;
+}
+
+function classifyExpertItem(item, match) {
+  const text = articleText(item);
+  const mentionsHome = hasTeam(text, match.home);
+  const mentionsAway = hasTeam(text, match.away);
+  const predictionContext = /prediction|predict|pick|odds|betting|best bet|preview|forecast|expert|analysis|team news|lineup|injury|sentiment/.test(text);
+  const weight = sourceWeight(item.source);
+  let homeScore = teamDirectionalScore(text, match.home, match.away) * weight;
+  let awayScore = teamDirectionalScore(text, match.away, match.home) * weight;
+
+  if (predictionContext && mentionsHome && !mentionsAway) homeScore += 0.65 * weight;
+  if (predictionContext && mentionsAway && !mentionsHome) awayScore += 0.65 * weight;
+  if (!predictionContext && !(homeScore || awayScore)) {
+    return { ...item, mentionsHome, mentionsAway, isPrediction: false, lean: "neutral", score: 0, note: "General media note" };
+  }
+
+  const diff = homeScore - awayScore;
+  const lean = Math.abs(diff) < 0.75 ? "neutral" : diff > 0 ? "home" : "away";
+  return {
+    ...item,
+    mentionsHome,
+    mentionsAway,
+    isPrediction: predictionContext,
+    lean,
+    score: Number(Math.abs(diff).toFixed(2)),
+    note: predictionContext ? "Prediction, odds, or team-news context" : "Directional mention"
+  };
+}
+
+function dedupeMediaItems(items) {
+  const seen = new Set();
+  return items.filter((item) => {
+    const key = stripMarks(`${item.title || item.headline || ""}:${item.source || ""}`).slice(0, 180);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function buildExpertSignal(match, items = []) {
+  const notes = dedupeMediaItems(items)
+    .map((item) => classifyExpertItem({
+      title: item.title || item.headline,
+      description: item.description || "",
+      source: item.source || "Media",
+      link: item.link,
+      publishedAt: item.publishedAt
+    }, match))
+    .filter((item) => item.mentionsHome || item.mentionsAway)
+    .filter((item) => item.title)
+    .slice(0, 12);
+
+  const totals = notes.reduce((acc, item) => {
+    if (item.lean === "home") acc.home += item.score || 0.8;
+    if (item.lean === "away") acc.away += item.score || 0.8;
+    if (item.lean === "neutral") acc.neutral += 1;
+    return acc;
+  }, { home: 0, away: 0, neutral: 0 });
+  const directionalTotal = totals.home + totals.away;
+  const diff = directionalTotal ? (totals.home - totals.away) / directionalTotal : 0;
+  const draw = clamp(24 - Math.abs(diff) * 4 + Math.min(3, totals.neutral * 0.25), 18, 28);
+  const homeShare = clamp(0.5 + diff * 0.36, 0.18, 0.82);
+  const usable = directionalTotal >= 1.25 && Math.abs(diff) >= 0.18;
+  const probabilities = {
+    home: Number(((100 - draw) * homeShare).toFixed(1)),
+    draw: Number(draw.toFixed(1)),
+    away: Number(((100 - draw) * (1 - homeShare)).toFixed(1))
+  };
+  const lean = usable ? (diff > 0 ? "home" : "away") : "neutral";
+
+  return {
+    label: "Live expert media sentiment",
+    usable,
+    lean,
+    leanLabel: lean === "home" ? match.home : lean === "away" ? match.away : "No clear lean",
+    confidence: Number(clamp(Math.abs(diff) * 100, 0, 100).toFixed(1)),
+    probabilities,
+    noteCount: notes.length,
+    directionalNotes: Number(directionalTotal.toFixed(1)),
+    sourceCount: new Set(notes.map((item) => item.source)).size,
+    notes
+  };
+}
+
+async function fetchExpertMedia(match, summary, limit = 10) {
+  const espnItems = (summary?.news || []).map((item) => ({
+    title: item.headline || item.title,
+    description: item.description || "",
+    source: item.source || "ESPN",
+    link: item.link,
+    publishedAt: item.publishedAt
+  }));
+  const queries = [
+    `${match.home} ${match.away} World Cup 2026 expert prediction preview odds`,
+    `${match.home} ${match.away} World Cup 2026 team news predicted lineups`
+  ];
+  const pulled = await Promise.all(
+    queries.map((query) => fetchGoogleNews(query, Math.ceil(limit / 2)).catch(() => []))
+  );
+  return buildExpertSignal(match, [...espnItems, ...pulled.flat()].slice(0, limit + espnItems.length));
 }
 
 async function getSquads() {
@@ -659,7 +884,7 @@ async function buildSignalDay(dateKey = "20260620") {
     eventMatches.map(({ event }) => event?.id ? fetchEspnSummary(event.id).catch(() => null) : null)
   );
 
-  const matches = eventMatches.map(({ match, event }, index) => {
+  const preparedMatches = eventMatches.map(({ match, event }, index) => {
     const summary = compactSummary(summaries[index]);
     const homeSquad = findSquad(squads, match.team1 || summary?.home?.name);
     const awaySquad = findSquad(squads, match.team2 || summary?.away?.name);
@@ -669,13 +894,23 @@ async function buildSignalDay(dateKey = "20260620") {
       home: summary?.home?.name || match.team1,
       away: summary?.away?.name || match.team2
     };
+    return { match, event, summary, homeProfile, awayProfile, resolvedMatch };
+  });
+
+  const expertSignals = await Promise.all(
+    preparedMatches.map(({ resolvedMatch, summary }) => fetchExpertMedia(resolvedMatch, summary, 10).catch(() => buildExpertSignal(resolvedMatch, [])))
+  );
+
+  const matches = preparedMatches.map(({ match, event, summary, homeProfile, awayProfile, resolvedMatch }, index) => {
     const gmt = gmtFromIso(summary?.date) || gmtFromOpenFootball(match.date, match.openFootballCrossCheck?.time);
-    const predictionModel = buildPredictionModel(resolvedMatch, homeProfile, awayProfile, summary);
+    const expertMedia = expertSignals[index];
+    const predictionModel = buildPredictionModel(resolvedMatch, homeProfile, awayProfile, summary, expertMedia);
     return {
       source: {
         schedule: "rezarahiminia/worldcup2026",
         crossCheck: match.openFootballCrossCheck ? "OpenFootball matched" : "OpenFootball not matched",
-        live: event ? "ESPN public API" : "not mapped"
+        live: event ? "ESPN public API" : "not mapped",
+        expertMedia: expertMedia.noteCount ? "Google News RSS + ESPN news" : "not enough media notes"
       },
       eventId: event?.id || null,
       group: match.group || null,
@@ -687,6 +922,7 @@ async function buildSignalDay(dateKey = "20260620") {
       away: resolvedMatch.away,
       summary,
       predictionModel,
+      expertMedia,
       squadSignals: {
         home: homeProfile,
         away: awayProfile
@@ -705,7 +941,7 @@ async function buildSignalDay(dateKey = "20260620") {
     fetchedAt: new Date().toISOString(),
     matches,
     teams,
-    sources: ["rezarahiminia/worldcup2026", "ESPN public API", "OpenFootball", "FIFA squad PDF", "Google News RSS"]
+    sources: ["rezarahiminia/worldcup2026", "ESPN public API", "OpenFootball", "FIFA squad PDF", "Google News RSS", "Expert media sentiment"]
   };
 }
 
@@ -1068,6 +1304,15 @@ async function handleApi(req, res, url) {
             freshness: "historical"
           },
           {
+            id: "expert-media-rss",
+            name: "Expert media pulse",
+            access: "public_rss",
+            status: "connected",
+            pulled: {},
+            fields: ["prediction headlines", "preview notes", "team news", "predicted lineups", "source sentiment"],
+            freshness: "live on refresh via Google News RSS and ESPN news metadata"
+          },
+          {
             id: "balldontlie-fifa",
             name: "BALLDONTLIE FIFA API",
             access: "api_key",
@@ -1206,6 +1451,7 @@ async function handleApi(req, res, url) {
         players: squad?.players || [],
         playerInsights: insights,
         todayMatch: match,
+        expertMedia: match?.expertMedia || null,
         opponent: opponentName,
         news
       });
@@ -1227,12 +1473,13 @@ async function handleApi(req, res, url) {
       const awaySquad = findSquad(squads, match.away);
       const homeProfile = squadStats(homeSquad);
       const awayProfile = squadStats(awaySquad);
-      const prediction = match.predictionModel || buildPredictionModel(match, homeProfile, awayProfile, summary);
+      const expertMedia = await fetchExpertMedia(match, summary, 12).catch(() => match.expertMedia || buildExpertSignal(match, []));
+      const prediction = buildPredictionModel(match, homeProfile, awayProfile, summary, expertMedia);
       const news = await fetchGoogleNews(`${match.home} ${match.away} World Cup 2026 prediction preview odds`, 10).catch(() => []);
 
       jsonResponse(res, 200, {
         fetchedAt: new Date().toISOString(),
-        source: ["rezarahiminia/worldcup2026", "ESPN public API", "FIFA squad PDF", "Google News RSS", "OpenFootball cross-check"],
+        source: ["rezarahiminia/worldcup2026", "ESPN public API", "FIFA squad PDF", "Google News RSS", "OpenFootball cross-check", "Expert media sentiment"],
         match: { ...match, summary },
         squads: {
           home: homeSquad,
@@ -1248,6 +1495,7 @@ async function handleApi(req, res, url) {
         },
         uncommonInsights: buildUncommonInsights(match, homeSquad, awaySquad),
         prediction,
+        expertMedia,
         market: summary?.odds || null,
         news
       });

@@ -227,6 +227,7 @@ function renderTodayMatches() {
     card.dataset.eventId = match.eventId || "";
     const prediction = match.predictionModel;
     const odds = match.summary?.odds;
+    const expert = prediction?.components?.expertMedia || match.expertMedia;
     const homeProb = prediction?.probabilities?.home;
     const awayProb = prediction?.probabilities?.away;
     card.innerHTML = `
@@ -249,6 +250,7 @@ function renderTodayMatches() {
       </div>
       <div class="today-card-meta">${prediction ? `Favorite: ${escapeHtml(prediction.favorite)} · ${escapeHtml(prediction.confidence)} confidence` : "Prediction data pending"}</div>
       <div class="today-card-meta">${odds ? `${escapeHtml(odds.provider || "Odds")} market blended with squad history` : "Historical squad model only"}</div>
+      <div class="today-card-meta">${expert?.noteCount ? `Expert pulse: ${escapeHtml(expert.leanLabel || "No clear lean")} · ${escapeHtml(expert.noteCount)} notes` : "Expert pulse pending"}</div>
     `;
     card.addEventListener("click", async () => {
       $("#todayMatchSelect").selectedIndex = index;
@@ -328,6 +330,32 @@ function renderNews(items, target) {
       ${item.description ? `<p>${escapeHtml(item.description)}</p>` : ""}
     </a>
   `).join("");
+}
+
+function renderExpertNotes(expertMedia) {
+  const node = $("#expertNotes");
+  if (!node) return;
+  const notes = expertMedia?.notes || [];
+  if (!notes.length) {
+    node.innerHTML = `<div class="empty">No expert media notes pulled yet.</div>`;
+    return;
+  }
+  node.innerHTML = `
+    <div class="expert-summary">
+      <span>${escapeHtml(expertMedia.leanLabel || "No clear lean")}</span>
+      <b>${escapeHtml(expertMedia.confidence || 0)} sentiment</b>
+      <em>${escapeHtml(expertMedia.noteCount || notes.length)} live notes · ${escapeHtml(expertMedia.sourceCount || 0)} sources</em>
+    </div>
+    <div class="expert-note-list">
+      ${notes.map((item) => `
+        <a class="expert-note ${escapeHtml(item.lean || "neutral")}" href="${escapeHtml(item.link || "#")}" target="_blank" rel="noreferrer">
+          <span>${escapeHtml(item.source || "Expert media")} · ${escapeHtml(item.lean === "home" || item.lean === "away" ? "directional" : "neutral")}</span>
+          <strong>${escapeHtml(item.title)}</strong>
+          ${item.description ? `<p>${escapeHtml(item.description)}</p>` : ""}
+        </a>
+      `).join("")}
+    </div>
+  `;
 }
 
 function renderPlayerCards(players, target, labelPrefix = "") {
@@ -421,6 +449,7 @@ function renderPrediction(prediction) {
       <span>Market ${escapeHtml(Math.round((prediction.components?.weights?.market || 0) * 100))}%</span>
       <span>Squad ${escapeHtml(Math.round((prediction.components?.weights?.historicalSquad || 0) * 100))}%</span>
       <span>Live ${escapeHtml(Math.round((prediction.components?.weights?.liveTournament || 0) * 100))}%</span>
+      <span>Expert ${escapeHtml(Math.round((prediction.components?.weights?.expertMedia || 0) * 100))}%</span>
     </div>
     ${prediction.edges?.length ? `<div class="model-edges">${prediction.edges.map((edge) => `<p>${escapeHtml(edge)}</p>`).join("")}</div>` : ""}
   `;
@@ -476,6 +505,7 @@ function renderMatchRoom(data) {
   $("#uncommonInsights").innerHTML = (data.uncommonInsights || []).length
     ? data.uncommonInsights.map((item) => `<article>${escapeHtml(item)}</article>`).join("")
     : `<div class="empty">No uncommon cross-source signals generated.</div>`;
+  renderExpertNotes(data.expertMedia);
 
   const homePlayers = (data.keyPlayers?.home || []).slice(0, 5).map((player) => ({ ...player, tags: [`${match.home}`, ...(player.tags || [])] }));
   const awayPlayers = (data.keyPlayers?.away || []).slice(0, 5).map((player) => ({ ...player, tags: [`${match.away}`, ...(player.tags || [])] }));
