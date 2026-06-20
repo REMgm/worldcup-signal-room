@@ -1015,7 +1015,14 @@ tbody tr:hover {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 14px;
+  align-items: start;
   margin-bottom: 14px;
+}
+
+.deep-grid > .panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .profile-grid {
@@ -1417,6 +1424,27 @@ tbody tr:hover {
 .expert-notes {
   display: grid;
   gap: 12px;
+}
+
+.expert-panel .expert-notes {
+  min-height: 0;
+  scrollbar-color: rgba(241, 184, 50, 0.82) rgba(255, 255, 255, 0.08);
+  scrollbar-width: thin;
+}
+
+.expert-panel .expert-notes::-webkit-scrollbar {
+  width: 10px;
+}
+
+.expert-panel .expert-notes::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.expert-panel .expert-notes::-webkit-scrollbar-thumb {
+  border: 2px solid rgba(11, 13, 10, 0.88);
+  border-radius: 999px;
+  background: var(--away);
 }
 
 .expert-summary {
@@ -1829,6 +1857,19 @@ tbody tr:hover {
 
 .error {
   color: #ffb0aa;
+}
+
+@media (min-width: 1181px) {
+  .deep-grid > .panel {
+    height: min(780px, calc(100vh - 48px));
+  }
+
+  .expert-panel .expert-notes {
+    flex: 1;
+    overflow-y: auto;
+    padding-right: 10px;
+    scrollbar-gutter: stable;
+  }
 }
 
 @media (max-width: 1180px) {
