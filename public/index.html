@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>World Cup Signal Room</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="page-field" aria-hidden="true"></div>
+    <div class="app-shell">
+      <header class="topbar" aria-label="Tournament command header">
+        <div class="brand-block">
+          <div class="brand-mark" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <div>
+            <p class="eyebrow">FIFA World Cup 2026</p>
+            <h1>Signal Room</h1>
+          </div>
+        </div>
+        <div class="header-live">
+          <div class="live-card">
+            <span>Feed</span>
+            <strong>Public + Licensed</strong>
+          </div>
+          <div class="live-card">
+            <span>Model</span>
+            <strong>xT Pulse</strong>
+          </div>
+          <div class="top-actions" aria-label="Dashboard controls">
+            <button class="icon-button" id="refreshButton" type="button" title="Refresh data" aria-label="Refresh data">
+              <span aria-hidden="true">↻</span>
+            </button>
+            <div class="status-chip" id="refreshStatus">Initializing</div>
+          </div>
+        </div>
+      </header>
+
+      <div class="nav-row">
+        <nav class="tabbar" aria-label="Dashboard views">
+          <button class="tab active" data-view="overview" type="button">Today</button>
+          <button class="tab" data-view="team-room" type="button">Team Room</button>
+          <button class="tab" data-view="match-room" type="button">Match Room</button>
+          <button class="tab" data-view="match-lab" type="button">Match Lab</button>
+          <button class="tab" data-view="access" type="button">Access Matrix</button>
+        </nav>
+        <div class="source-ticker" id="sourceTicker">Source sync pending</div>
+      </div>
+
+      <main>
+        <section class="view active" id="overview">
+          <section class="panel signal-controls">
+            <div class="field">
+              <label for="favoriteTeamSelect">Favorite Team</label>
+              <select id="favoriteTeamSelect"></select>
+            </div>
+            <div class="field wide">
+              <label for="todayMatchSelect">Match Deep Dive</label>
+              <select id="todayMatchSelect"></select>
+            </div>
+            <button class="primary-button" id="openTeamButton" type="button">Open Team Room</button>
+            <button class="primary-button accent" id="openMatchButton" type="button">Open Match Room</button>
+          </section>
+
+          <section class="metric-grid" id="metricGrid"></section>
+
+          <section class="today-grid" id="todayMatchGrid"></section>
+
+          <section class="two-column">
+            <div class="panel fixtures-panel">
+              <div class="panel-header">
+                <div>
+                  <h2>2026 Fixture Feed</h2>
+                  <p id="fixtureSourceLabel">Tournament schedule layer</p>
+                </div>
+                <div class="input-wrap">
+                  <label for="fixtureSearch">Filter</label>
+                  <input id="fixtureSearch" type="search" placeholder="Team, group, city">
+                </div>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Match</th>
+                      <th>Group</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="fixtureRows"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="panel reference-panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Momentum Wall</h2>
+                  <p>Reference plots</p>
+                </div>
+              </div>
+              <div class="reference-grid" id="referenceGrid"></div>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="team-room">
+          <section class="team-hero" id="teamHero"></section>
+          <section class="room-grid">
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Squad Profile</h2>
+                  <p>FIFA official squad list</p>
+                </div>
+              </div>
+              <div id="teamProfile" class="profile-grid"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Shape Visuals</h2>
+                  <p>Experience, scoring, height, positions</p>
+                </div>
+              </div>
+              <div id="teamCharts" class="chart-stack"></div>
+            </div>
+          </section>
+          <section class="room-grid">
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Player Signals</h2>
+                  <p>Uncommon leverage points</p>
+                </div>
+              </div>
+              <div id="teamPlayers" class="player-grid"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>News & Opinion</h2>
+                  <p>Google News RSS</p>
+                </div>
+              </div>
+              <div id="teamNews" class="news-list"></div>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="match-room">
+          <section class="match-hero" id="matchRoomHero"></section>
+          <section class="deep-grid">
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Chance Model</h2>
+                  <p>Market, squad history, and live tournament signal</p>
+                </div>
+              </div>
+              <div id="predictionChart" class="prediction-chart"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Squad Comparison</h2>
+                  <p>FIFA squad list cross-reference</p>
+                </div>
+              </div>
+              <div id="comparisonBars" class="comparison-bars"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Source Signals</h2>
+                  <p>Cross-source anomalies</p>
+                </div>
+              </div>
+              <div id="uncommonInsights" class="insight-list"></div>
+            </div>
+          </section>
+          <section class="room-grid">
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Player Matchups</h2>
+                  <p>High-leverage individual signals</p>
+                </div>
+              </div>
+              <div id="matchPlayers" class="player-grid"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Preview Wire</h2>
+                  <p>Predictions and expert coverage</p>
+                </div>
+              </div>
+              <div id="matchNews" class="news-list"></div>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="match-lab">
+          <section class="control-strip">
+            <div class="field">
+              <label for="competitionSelect">Dataset</label>
+              <select id="competitionSelect"></select>
+            </div>
+            <div class="field wide">
+              <label for="matchSelect">Match</label>
+              <select id="matchSelect"></select>
+            </div>
+          </section>
+
+          <section class="match-grid">
+            <div class="panel chart-panel">
+              <div class="panel-header">
+                <div>
+                  <h2 id="matchTitle">Match Momentum</h2>
+                  <p id="matchSubtitle">StatsBomb event signal</p>
+                </div>
+                <div class="legend">
+                  <span><i class="home-dot"></i>Home</span>
+                  <span><i class="away-dot"></i>Away</span>
+                </div>
+              </div>
+              <div id="momentumChart" class="momentum-chart"></div>
+            </div>
+
+            <aside class="panel detail-panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Match Pull</h2>
+                  <p id="matchPullStatus">Waiting</p>
+                </div>
+              </div>
+              <div class="stat-list" id="matchStats"></div>
+              <div class="mini-section">
+                <h3>Goals</h3>
+                <div id="goalList" class="event-list"></div>
+              </div>
+            </aside>
+          </section>
+
+          <section class="two-column">
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Event Mix</h2>
+                  <p>Top event types</p>
+                </div>
+              </div>
+              <div id="eventMix" class="bar-list"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Available Fields</h2>
+                  <p>Current match payload</p>
+                </div>
+              </div>
+              <div id="fieldList" class="field-cloud"></div>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="access">
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Source Access Matrix</h2>
+                <p id="sourceTimestamp">Status</p>
+              </div>
+            </div>
+            <div class="source-grid" id="sourceGrid"></div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <template id="metricTemplate">
+      <article class="metric-card">
+        <p></p>
+        <strong></strong>
+        <span></span>
+      </article>
+    </template>
+
+    <script src="app.js" type="module"></script>
+  </body>
+</html>
