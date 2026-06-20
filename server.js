@@ -17,6 +17,7 @@ const BALLDONTLIE_BASE = "https://api.balldontlie.io/fifa/worldcup/v1";
 const BALLDONTLIE_API_KEY = process.env.BALLDONTLIE_API_KEY || "";
 
 const cache = new Map();
+const inFlight = new Map();
 const CACHE_MS = 1000 * 60 * 10;
 
 const mimeTypes = {
@@ -43,6 +44,23 @@ function jsonResponse(res, status, body) {
 
 function badRequest(res, message) {
   jsonResponse(res, 400, { error: message });
+}
+
+function ballDontLieHeaders() {
+  return {
+    Authorization: `Bearer ${BALLDONTLIE_API_KEY}`
+  };
+}
+
+function delay(ms) {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
+}
+
+async function onceInFlight(key, factory) {
+  if (inFlight.has(key)) return inFlight.get(key);
+  const promise = factory().finally(() => inFlight.delete(key));
+  inFlight.set(key, promise);
+  return promise;
 }
 
 async function fetchJson(url, options = {}) {
@@ -1565,7 +1583,7 @@ async function probeBallDontLie() {
       headers: {
         "accept": "application/json",
         "user-agent": "WorldCupMomentumDashboard/1.0",
-        "Authorization": BALLDONTLIE_API_KEY
+        ...ballDontLieHeaders()
       }
     });
     return { status: response.status, ok: response.ok };
@@ -1579,7 +1597,7 @@ async function fetchBallDontLie(path, fallback = null) {
   try {
     const separator = path.includes("?") ? "&" : "?";
     const url = `${BALLDONTLIE_BASE}${path}${separator}seasons[]=2026`;
-    const result = await fetchJsonWithHeaders(url, { Authorization: BALLDONTLIE_API_KEY }, { ttl: 1000 * 60 * 3 });
+    const result = await fetchJsonWithHeaders(url, ballDontLieHeaders(), { ttl: 1000 * 60 * 3 });
     return result.data;
   } catch {
     return fallback;
@@ -1587,24 +1605,37 @@ async function fetchBallDontLie(path, fallback = null) {
 }
 
 async function getBallDontLieOverview() {
-  if (!BALLDONTLIE_API_KEY) {
-    return { status: "missing_key", connected: false, data: null };
-  }
-  const status = await probeBallDontLie();
-  if (!status.ok) {
-    return { status: status.status, connected: false, data: null };
-  }
-  const [matches, teams, players, standings] = await Promise.all([
-    fetchBallDontLie("/matches?per_page=100"),
-    fetchBallDontLie("/teams?per_page=100"),
-    fetchBallDontLie("/players?per_page=100"),
-    fetchBallDontLie("/group_standings?per_page=100")
-  ]);
-  return {
-    status: status.status,
-    connected: true,
-    data: { matches, teams, players, standings }
-  };
+  return onceInFlight("ball-dont-lie:overview", async () => {
+    const cached = cache.get("ball-dont-lie:overview");
+    if (cached && Date.now() - cached.at < 1000 * 60 * 3) return cached.value;
+    if (!BALLDONTLIE_API_KEY) {
+      return { status: "missing_key", connected: false, data: null };
+    }
+    const status = await probeBallDontLie();
+    if (!status.ok) {
+      return { status: status.status, connected: false, data: null };
+    }
+
+    const data = {};
+    const endpoints = [
+      ["matches", "/matches?per_page=100"],
+      ["teams", "/teams?per_page=100"],
+      ["players", "/players?per_page=100"],
+      ["standings", "/group_standings?per_page=100"]
+    ];
+    for (const [key, path] of endpoints) {
+      data[key] = await fetchBallDontLie(path);
+      await delay(250);
+    }
+
+    const value = {
+      status: status.status,
+      connected: true,
+      data
+    };
+    cache.set("ball-dont-lie:overview", { at: Date.now(), value });
+    return value;
+  });
 }
 
 async function handleApi(req, res, url) {
