@@ -914,6 +914,113 @@ function summaryTeams(summary) {
   return { home, away };
 }
 
+function athletePhoto(athlete) {
+  return athlete?.headshot?.href || athlete?.headshot || null;
+}
+
+function athleteName(athlete) {
+  return athlete?.displayName || athlete?.fullName || athlete?.shortName || athlete?.name || "";
+}
+
+function compactAthlete(athlete = {}) {
+  return {
+    id: athlete.id || null,
+    name: athleteName(athlete),
+    shortName: athlete.shortName || athleteName(athlete),
+    photo: athletePhoto(athlete),
+    position: athlete.position?.abbreviation || athlete.position?.displayName || athlete.position?.name || ""
+  };
+}
+
+function cleanUniform(uniform = {}, fallback = {}) {
+  return {
+    type: uniform.type || fallback.type || "team",
+    color: String(uniform.color || fallback.color || "1fc16b").replace(/^#/, ""),
+    alternateColor: String(uniform.alternateColor || fallback.alternateColor || "0b0d0a").replace(/^#/, "")
+  };
+}
+
+function compactSubstitutions(summary) {
+  return (summary?.keyEvents || [])
+    .filter((event) => event.type?.type === "substitution" || /substitution/i.test(event.type?.text || ""))
+    .map((event) => {
+      const incoming = compactAthlete(event.participants?.[0]?.athlete);
+      const outgoing = compactAthlete(event.participants?.[1]?.athlete);
+      return {
+        minute: event.clock?.displayValue || "",
+        team: event.team?.displayName || event.team?.name || "",
+        in: incoming,
+        out: outgoing,
+        text: event.text || ""
+      };
+    })
+    .filter((item) => item.in.name || item.out.name);
+}
+
+function compactLineups(summary) {
+  const substitutions = compactSubstitutions(summary);
+  const teams = summary?.boxscore?.teams || [];
+
+  return (summary?.rosters || []).map((rosterBlock, index) => {
+    const teamName = rosterBlock.team?.displayName
+      || rosterBlock.team?.name
+      || teams[index]?.team?.displayName
+      || teams[index]?.team?.name
+      || "";
+    const teamSubs = substitutions.filter((item) => teamKey(item.team) === teamKey(teamName));
+    const starterPlaceById = new Map();
+    const starterPlaceByName = new Map();
+
+    for (const entry of rosterBlock.roster || []) {
+      if (!entry.starter) continue;
+      const athlete = compactAthlete(entry.athlete);
+      const place = String(entry.formationPlace || "0");
+      if (athlete.id) starterPlaceById.set(String(athlete.id), place);
+      if (athlete.name) starterPlaceByName.set(teamKey(athlete.name), place);
+    }
+
+    const replacementPlaceById = new Map();
+    const replacementPlaceByName = new Map();
+    const enrichedSubs = teamSubs.map((item) => {
+      const replacedPlace = starterPlaceById.get(String(item.out.id || ""))
+        || starterPlaceByName.get(teamKey(item.out.name))
+        || "0";
+      if (item.in.id) replacementPlaceById.set(String(item.in.id), replacedPlace);
+      if (item.in.name) replacementPlaceByName.set(teamKey(item.in.name), replacedPlace);
+      return { ...item, formationPlace: replacedPlace };
+    });
+
+    const players = (rosterBlock.roster || []).map((entry) => {
+      const athlete = compactAthlete(entry.athlete);
+      const rawPlace = String(entry.formationPlace || "0");
+      const replacementPlace = replacementPlaceById.get(String(athlete.id || ""))
+        || replacementPlaceByName.get(teamKey(athlete.name))
+        || "";
+      const formationPlace = rawPlace !== "0" ? rawPlace : replacementPlace || rawPlace;
+      return {
+        ...athlete,
+        jersey: entry.jersey || "",
+        formationPlace,
+        starter: Boolean(entry.starter),
+        active: entry.active !== false,
+        subbedIn: Boolean(entry.subbedIn),
+        subbedOut: Boolean(entry.subbedOut),
+        current: Boolean((entry.starter && !entry.subbedOut) || entry.subbedIn)
+      };
+    });
+
+    return {
+      team: teamName,
+      formation: rosterBlock.formation || "",
+      uniform: cleanUniform(rosterBlock.uniform || teams[index]?.team?.uniform),
+      current: players.filter((player) => player.current).slice(0, 11),
+      starters: players.filter((player) => player.starter).slice(0, 11),
+      bench: players.filter((player) => !player.starter),
+      substitutions: enrichedSubs
+    };
+  });
+}
+
 function compactSummary(summary) {
   if (!summary?.header) return null;
   const competition = summary.header.competitions?.[0] || {};
@@ -969,6 +1076,7 @@ function compactSummary(summary) {
     headToHead: summary.headToHeadGames || [],
     standings: summary.standings || null,
     leaders: summary.leaders || [],
+    lineups: compactLineups(summary),
     news: summary.news?.articles?.slice(0, 6).map((article) => ({
       headline: article.headline,
       description: article.description,
@@ -1171,6 +1279,65 @@ function buildPlayerInsights(squad, opponentSquad) {
     })
     .sort((a, b) => b.impactScore - a.impactScore)
     .slice(0, 10);
+}
+
+function personKey(value) {
+  return stripMarks(value)
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .split(/\s+/)
+    .filter((part) => part.length > 1)
+    .sort()
+    .join(" ");
+}
+
+function squadPlayerKeys(player) {
+  return [
+    player.playerName,
+    `${player.firstNames || ""} ${player.lastNames || ""}`,
+    `${player.firstNames || ""} ${player.shirtName || ""}`,
+    player.shirtName
+  ].map(personKey).filter(Boolean);
+}
+
+function lineupMediaIndex(lineup) {
+  const map = new Map();
+  const players = [
+    ...(lineup?.current || []),
+    ...(lineup?.starters || []),
+    ...(lineup?.bench || [])
+  ];
+
+  for (const player of players) {
+    const media = {
+      espnId: player.id,
+      photo: player.photo,
+      espnName: player.name,
+      jersey: player.jersey
+    };
+    for (const key of [personKey(player.name), personKey(player.shortName)].filter(Boolean)) {
+      if (!map.has(key)) map.set(key, media);
+    }
+  }
+  return map;
+}
+
+function enhancePlayersWithMedia(players, lineup) {
+  if (!lineup) return players;
+  const media = lineupMediaIndex(lineup);
+  return players.map((player) => {
+    const match = squadPlayerKeys(player).map((key) => media.get(key)).find(Boolean);
+    return match ? {
+      ...player,
+      photo: match.photo || null,
+      espnId: match.espnId,
+      espnName: match.espnName,
+      number: player.number || match.jersey
+    } : player;
+  });
+}
+
+function findLineup(summary, teamName) {
+  return (summary?.lineups || []).find((lineup) => teamKey(lineup.team) === teamKey(teamName)) || null;
 }
 
 function buildUncommonInsights(match, homeSquad, awaySquad) {
@@ -1643,7 +1810,8 @@ async function handleApi(req, res, url) {
       const opponentName = match ? (teamKey(match.home) === teamKey(teamName) ? match.away : match.home) : null;
       const opponentSquad = opponentName ? findSquad(squads, opponentName) : null;
       const profile = squadStats(squad);
-      const insights = buildPlayerInsights(squad, opponentSquad);
+      const teamLineup = match ? findLineup(match.summary, squad?.team || teamName) : null;
+      const insights = enhancePlayersWithMedia(buildPlayerInsights(squad, opponentSquad), teamLineup);
 
       jsonResponse(res, 200, {
         fetchedAt: new Date().toISOString(),
@@ -1655,6 +1823,7 @@ async function handleApi(req, res, url) {
         players: squad?.players || [],
         playerInsights: insights,
         todayMatch: match,
+        liveSetup: teamLineup,
         expertMedia: match?.expertMedia || null,
         opponent: opponentName,
         news
@@ -1705,6 +1874,9 @@ async function handleApi(req, res, url) {
         ? "Signal Room high-likelihood matchup model"
         : "Signal Room neutral matchup model";
       prediction.scorePrediction.basis = "FIFA squad history, projected scoring environment, and public expert-media sentiment";
+      const liveSummary = liveFixture?.summary || null;
+      const homeLineup = liveSummary ? findLineup(liveSummary, match.home) : null;
+      const awayLineup = liveSummary ? findLineup(liveSummary, match.away) : null;
 
       jsonResponse(res, 200, {
         fetchedAt: new Date().toISOString(),
@@ -1720,13 +1892,17 @@ async function handleApi(req, res, url) {
           away: awayProfile
         },
         keyPlayers: {
-          home: buildPlayerInsights(homeSquad, awaySquad),
-          away: buildPlayerInsights(awaySquad, homeSquad)
+          home: enhancePlayersWithMedia(buildPlayerInsights(homeSquad, awaySquad), homeLineup),
+          away: enhancePlayersWithMedia(buildPlayerInsights(awaySquad, homeSquad), awayLineup)
         },
         uncommonInsights: buildUncommonInsights(match, homeSquad, awaySquad),
         prediction,
         assumptions: buildMatchupAssumptions(match, summary, prediction),
         liveScore: liveFixture?.liveScore || liveScoreFromSummary(null),
+        lineups: {
+          home: homeLineup,
+          away: awayLineup
+        },
         liveFixture: liveFixture ? {
           eventId: liveFixture.eventId,
           match: {
@@ -1759,6 +1935,8 @@ async function handleApi(req, res, url) {
       const expertMedia = await fetchExpertMedia(match, summary, 12).catch(() => match.expertMedia || buildExpertSignal(match, []));
       const prediction = buildPredictionModel(match, homeProfile, awayProfile, summary, expertMedia);
       const news = await fetchGoogleNews(`${match.home} ${match.away} World Cup 2026 prediction preview odds`, 10).catch(() => []);
+      const homeLineup = findLineup(summary, match.home);
+      const awayLineup = findLineup(summary, match.away);
 
       jsonResponse(res, 200, {
         fetchedAt: new Date().toISOString(),
@@ -1773,12 +1951,16 @@ async function handleApi(req, res, url) {
           away: awayProfile
         },
         keyPlayers: {
-          home: buildPlayerInsights(homeSquad, awaySquad),
-          away: buildPlayerInsights(awaySquad, homeSquad)
+          home: enhancePlayersWithMedia(buildPlayerInsights(homeSquad, awaySquad), homeLineup),
+          away: enhancePlayersWithMedia(buildPlayerInsights(awaySquad, homeSquad), awayLineup)
         },
         uncommonInsights: buildUncommonInsights(match, homeSquad, awaySquad),
         prediction,
         liveScore: liveScoreFromSummary(summary),
+        lineups: {
+          home: homeLineup,
+          away: awayLineup
+        },
         expertMedia,
         market: summary?.odds || null,
         news

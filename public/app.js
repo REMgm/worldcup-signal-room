@@ -96,6 +96,7 @@ function captureSelection() {
     favoriteTeam: favoriteSelect?.value || state.teamRoom?.team || "",
     matchValue: matchOption?.value || state.matchRoom?.match?.eventId || "",
     matchSignature: matchOption?.dataset?.signature || matchSignature(state.matchRoom?.match),
+    teamRoomTeam: $("#teamRoomSelect")?.value || state.teamRoom?.team || "",
     matchupHome: $("#matchupHomeSelect")?.value || state.matchupLab?.match?.home || "",
     matchupAway: $("#matchupAwaySelect")?.value || state.matchupLab?.match?.away || ""
   };
@@ -398,6 +399,123 @@ function renderPositionVisual(data, target) {
   `;
 }
 
+function initials(name = "") {
+  const parts = String(name).split(/\s+/).filter(Boolean);
+  return (parts[0]?.[0] || "").concat(parts.at(-1)?.[0] || "").toUpperCase() || "XI";
+}
+
+function safeHex(value, fallback = "1fc16b") {
+  const raw = String(value || fallback).replace(/^#/, "");
+  return /^[0-9a-f]{6}$/i.test(raw) ? raw : fallback;
+}
+
+function fallbackKit(teamName = "") {
+  let hash = 0;
+  for (const char of teamName) hash = (hash * 31 + char.charCodeAt(0)) % 0xffffff;
+  const color = hash.toString(16).padStart(6, "0");
+  return { type: "team", color, alternateColor: "0b0d0a" };
+}
+
+function kitVars(kit, teamName) {
+  const source = kit?.color ? kit : fallbackKit(teamName);
+  return `--kit:#${safeHex(source.color)}; --kit-alt:#${safeHex(source.alternateColor, "0b0d0a")}`;
+}
+
+function renderKitImage(kit, teamName, size = "large") {
+  return `
+    <div class="kit-image ${escapeHtml(size)}" style="${kitVars(kit, teamName)}" aria-label="${escapeHtml(teamName)} kit">
+      <i></i>
+      <span>${escapeHtml(initials(teamName))}</span>
+    </div>
+  `;
+}
+
+function renderKitCard(kit, teamName, detail = "") {
+  const label = kit?.type ? `${kit.type} kit` : "team kit";
+  return `
+    <article class="kit-card">
+      ${renderKitImage(kit, teamName)}
+      <div>
+        <span>${escapeHtml(label)}</span>
+        <strong>${escapeHtml(teamName)}</strong>
+        <p>${escapeHtml(detail || "Kit colorway from the mapped match feed when available.")}</p>
+      </div>
+    </article>
+  `;
+}
+
+const FORMATION_COORDINATES = {
+  "1": [50, 88],
+  "2": [78, 68],
+  "3": [22, 68],
+  "4": [50, 56],
+  "5": [38, 70],
+  "6": [62, 70],
+  "7": [34, 42],
+  "8": [66, 42],
+  "9": [50, 19],
+  "10": [75, 25],
+  "11": [25, 25]
+};
+
+function setupCoordinates(player, index) {
+  if (FORMATION_COORDINATES[player.formationPlace]) return FORMATION_COORDINATES[player.formationPlace];
+  const fallback = [
+    [50, 88], [18, 70], [38, 70], [62, 70], [82, 70],
+    [25, 46], [50, 48], [75, 46],
+    [22, 22], [50, 18], [78, 22]
+  ];
+  return fallback[index % fallback.length];
+}
+
+function playerPhotoMarkup(player, className = "player-photo") {
+  const name = player.shirtName || player.name || player.playerName || player.espnName || "";
+  const photo = player.photo || player.headshot;
+  return `
+    <div class="${escapeHtml(className)}">
+      ${photo ? `<img src="${escapeHtml(photo)}" alt="${escapeHtml(name)}">` : `<span>${escapeHtml(initials(name))}</span>`}
+    </div>
+  `;
+}
+
+function renderFieldSetup(lineup, target) {
+  const node = $(target);
+  if (!node) return;
+  if (!lineup?.current?.length) {
+    node.innerHTML = `<div class="empty">No live lineup is mapped for this team yet.</div>`;
+    return;
+  }
+
+  node.innerHTML = `
+    <div class="setup-summary">
+      <span>${escapeHtml(lineup.team)}</span>
+      <strong>${escapeHtml(lineup.formation || "Formation TBA")}</strong>
+      <em>${escapeHtml(lineup.current.length)} currently on field · ${escapeHtml(lineup.substitutions?.length || 0)} substitutions</em>
+    </div>
+    <div class="setup-pitch" style="${kitVars(lineup.uniform, lineup.team)}">
+      ${lineup.current.map((player, index) => {
+        const [x, y] = setupCoordinates(player, index);
+        return `
+          <div class="setup-player ${player.subbedIn ? "subbed-in" : ""}" style="--x:${x}; --y:${y}">
+            ${playerPhotoMarkup(player, "setup-photo")}
+            <b>${escapeHtml(player.jersey || "")}</b>
+            <span>${escapeHtml(player.shortName || player.name)}</span>
+          </div>
+        `;
+      }).join("")}
+    </div>
+    <div class="sub-list">
+      ${(lineup.substitutions || []).length ? lineup.substitutions.map((sub) => `
+        <article>
+          <span>${escapeHtml(sub.minute || "")}</span>
+          <strong>${escapeHtml(sub.in.name || "Player in")}</strong>
+          <small>for ${escapeHtml(sub.out.name || "Player out")}</small>
+        </article>
+      `).join("") : `<div class="empty">No substitutions recorded yet.</div>`}
+    </div>
+  `;
+}
+
 function renderNews(items, target) {
   const node = $(target);
   const list = items || [];
@@ -449,9 +567,12 @@ function renderPlayerCards(players, target, labelPrefix = "") {
   }
   node.innerHTML = list.map((player) => `
     <article class="player-card">
-      <div>
-        <span>${escapeHtml(labelPrefix || player.position)} · #${escapeHtml(player.number || "")}</span>
-        <strong>${escapeHtml(player.shirtName || player.playerName)}</strong>
+      <div class="player-card-head">
+        ${playerPhotoMarkup(player)}
+        <div>
+          <span>${escapeHtml(labelPrefix || player.position)} · #${escapeHtml(player.number || "")}</span>
+          <strong>${escapeHtml(player.shirtName || player.playerName || player.espnName)}</strong>
+        </div>
       </div>
       <p>${escapeHtml(player.club || "")}</p>
       <div class="player-stats">
@@ -464,14 +585,30 @@ function renderPlayerCards(players, target, labelPrefix = "") {
   `).join("");
 }
 
+function renderTeamRoomControls(selection = {}) {
+  const select = $("#teamRoomSelect");
+  const teams = state.squads?.teams || [];
+  if (!select || !teams.length) return;
+  const current = selection.teamRoomTeam || state.teamRoom?.team || $("#favoriteTeamSelect")?.value || teams[0]?.team || "";
+  select.replaceChildren(...teams.map((team) => {
+    const option = document.createElement("option");
+    option.value = team.team;
+    option.textContent = `${team.team}${team.code ? ` · ${team.code}` : ""}`;
+    return option;
+  }));
+  selectPreferredOption(select, current);
+}
+
 function renderTeamRoom(data) {
   const match = data.todayMatch;
+  renderTeamRoomControls({ teamRoomTeam: data.team });
   $("#teamHero").innerHTML = `
     <div>
       <p class="eyebrow">Favorite Team Intelligence</p>
       <h2>${escapeHtml(data.team)}</h2>
       <p>${escapeHtml(data.code || "")} · Coach: ${escapeHtml(data.coach?.coachName || "TBA")}</p>
     </div>
+    ${renderKitCard(data.liveSetup?.uniform, data.team, match ? `${match.home} vs ${match.away}` : "Squad colorway fallback")}
     <div class="hero-score">
       <span>Today</span>
       <strong>${match ? `${escapeHtml(match.home)} vs ${escapeHtml(match.away)}` : "No match today"}</strong>
@@ -489,6 +626,9 @@ function renderTeamRoom(data) {
     statCard("Avg Caps", profile.averageCaps || 0, "squad maturity"),
     statCard("Opponent", data.opponent || "TBA", "today's context")
   ].join("");
+
+  renderFieldSetup(data.liveSetup, "#teamLiveSetup");
+  $("#teamKitPanel").innerHTML = renderKitCard(data.liveSetup?.uniform, data.team, data.liveSetup?.formation ? `${data.liveSetup.formation} match setup colorway` : "No mapped match kit, generated fallback shown.");
 
   const positions = Object.entries(profile.positions || {}).map(([label, value]) => ({ label, value }));
   const scorers = (profile.topScorers || []).map((player) => ({ label: player.shirtName || player.playerName, value: player.goals, display: player.goals }));
@@ -577,9 +717,12 @@ function renderMatchRoom(data) {
   const match = data.match || {};
   const summary = match.summary || {};
   const score = data.prediction?.scorePrediction;
+  const homeLineup = data.lineups?.home;
+  const awayLineup = data.lineups?.away;
   $("#matchRoomHero").innerHTML = `
     <div class="match-side">
       ${summary.home?.logo ? `<img src="${escapeHtml(summary.home.logo)}" alt="">` : ""}
+      ${renderKitImage(homeLineup?.uniform, match.home, "small")}
       <h2>${escapeHtml(match.home)}</h2>
       <span>${escapeHtml(summary.home?.abbreviation || "")}</span>
     </div>
@@ -599,6 +742,7 @@ function renderMatchRoom(data) {
     </div>
     <div class="match-side away-side">
       ${summary.away?.logo ? `<img src="${escapeHtml(summary.away.logo)}" alt="">` : ""}
+      ${renderKitImage(awayLineup?.uniform, match.away, "small")}
       <h2>${escapeHtml(match.away)}</h2>
       <span>${escapeHtml(summary.away?.abbreviation || "")}</span>
     </div>
@@ -646,9 +790,12 @@ function renderMatchupLab(data) {
   const match = data.match || {};
   const summary = match.summary || {};
   const score = data.prediction?.scorePrediction;
+  const homeLineup = data.lineups?.home;
+  const awayLineup = data.lineups?.away;
   $("#matchupHero").innerHTML = `
     <div class="match-side">
       <span>${escapeHtml(summary.home?.abbreviation || "")}</span>
+      ${renderKitImage(homeLineup?.uniform, match.home, "small")}
       <h2>${escapeHtml(match.home)}</h2>
       <small>Power ${escapeHtml(summary.environment?.homePower || 0)} · ${escapeHtml(summary.environment?.homeXg || 0)} xG</small>
     </div>
@@ -668,6 +815,7 @@ function renderMatchupLab(data) {
     </div>
     <div class="match-side away-side">
       <span>${escapeHtml(summary.away?.abbreviation || "")}</span>
+      ${renderKitImage(awayLineup?.uniform, match.away, "small")}
       <h2>${escapeHtml(match.away)}</h2>
       <small>Power ${escapeHtml(summary.environment?.awayPower || 0)} · ${escapeHtml(summary.environment?.awayXg || 0)} xG</small>
     </div>
@@ -868,7 +1016,7 @@ async function loadSignalDay(options = {}) {
 }
 
 async function loadTeamRoom(options = {}) {
-  const team = $("#favoriteTeamSelect").value || state.signalDay?.teams?.[0];
+  const team = $("#teamRoomSelect")?.value || $("#favoriteTeamSelect").value || state.signalDay?.teams?.[0] || state.squads?.teams?.[0]?.team;
   if (!team) return;
   state.teamRoom = await getJson(`/api/team-room?date=${DEFAULT_DATE}&team=${encodeURIComponent(team)}`, options);
   renderTeamRoom(state.teamRoom);
@@ -883,6 +1031,7 @@ async function loadMatchRoom(options = {}) {
 
 async function loadSquads(options = {}) {
   state.squads = await getJson("/api/squads", options);
+  renderTeamRoomControls(options.selection);
   renderMatchupControls(options.selection);
 }
 
@@ -982,7 +1131,14 @@ function bindEvents() {
   $("#matchupHomeSelect").addEventListener("change", loadMatchupLab);
   $("#matchupAwaySelect").addEventListener("change", loadMatchupLab);
   $("#runMatchupButton").addEventListener("click", loadMatchupLab);
-  $("#favoriteTeamSelect").addEventListener("change", loadTeamRoom);
+  $("#teamRoomSelect").addEventListener("change", loadTeamRoom);
+  $("#favoriteTeamSelect").addEventListener("change", () => {
+    const teamRoomSelect = $("#teamRoomSelect");
+    if ([...teamRoomSelect.options].some((option) => option.value === $("#favoriteTeamSelect").value)) {
+      teamRoomSelect.value = $("#favoriteTeamSelect").value;
+    }
+    loadTeamRoom();
+  });
   $("#todayMatchSelect").addEventListener("change", loadMatchRoom);
   $("#openTeamButton").addEventListener("click", async () => {
     await loadTeamRoom();
