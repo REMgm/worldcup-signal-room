@@ -217,63 +217,75 @@
         <section class="view" id="match-lab">
           <section class="control-strip">
             <div class="field">
-              <label for="competitionSelect">Dataset</label>
-              <select id="competitionSelect"></select>
+              <label for="matchupHomeSelect">Team A</label>
+              <select id="matchupHomeSelect"></select>
             </div>
             <div class="field wide">
-              <label for="matchSelect">Match</label>
-              <select id="matchSelect"></select>
+              <label for="matchupAwaySelect">Team B</label>
+              <select id="matchupAwaySelect"></select>
             </div>
+            <button class="primary-button accent" id="runMatchupButton" type="button">Run Matchup</button>
           </section>
 
-          <section class="match-grid">
-            <div class="panel chart-panel">
-              <div class="panel-header">
-                <div>
-                  <h2 id="matchTitle">Match Momentum</h2>
-                  <p id="matchSubtitle">StatsBomb event signal</p>
-                </div>
-                <div class="legend">
-                  <span><i class="home-dot"></i>Home</span>
-                  <span><i class="away-dot"></i>Away</span>
-                </div>
-              </div>
-              <div id="momentumChart" class="momentum-chart"></div>
-            </div>
+          <section class="match-hero" id="matchupHero"></section>
 
-            <aside class="panel detail-panel">
-              <div class="panel-header">
-                <div>
-                  <h2>Match Pull</h2>
-                  <p id="matchPullStatus">Waiting</p>
-                </div>
-              </div>
-              <div class="stat-list" id="matchStats"></div>
-              <div class="mini-section">
-                <h3>Goals</h3>
-                <div id="goalList" class="event-list"></div>
-              </div>
-            </aside>
-          </section>
-
-          <section class="two-column">
+          <section class="deep-grid">
             <div class="panel">
               <div class="panel-header">
                 <div>
-                  <h2>Event Mix</h2>
-                  <p>Top event types</p>
+                  <h2>Prediction Model</h2>
+                  <p>Historical squad profile and projected scoring</p>
                 </div>
               </div>
-              <div id="eventMix" class="bar-list"></div>
+              <div id="matchupPredictionChart" class="prediction-chart"></div>
             </div>
             <div class="panel">
               <div class="panel-header">
                 <div>
-                  <h2>Available Fields</h2>
-                  <p>Current match payload</p>
+                  <h2>Squad Comparison</h2>
+                  <p>Experience, scoring, and profile gaps</p>
                 </div>
               </div>
-              <div id="fieldList" class="field-cloud"></div>
+              <div id="matchupComparisonBars" class="comparison-bars"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Model Assumptions</h2>
+                  <p>Transparent neutral-scenario inputs</p>
+                </div>
+              </div>
+              <div id="matchupAssumptions" class="insight-list"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Expert Media Pulse</h2>
+                  <p>Public prediction notes on refresh</p>
+                </div>
+              </div>
+              <div id="matchupExpertNotes" class="expert-notes"></div>
+            </div>
+          </section>
+
+          <section class="room-grid">
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Player Matchups</h2>
+                  <p>High-leverage individual signals</p>
+                </div>
+              </div>
+              <div id="matchupPlayers" class="player-grid"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Preview Wire</h2>
+                  <p>Predictions and squad coverage</p>
+                </div>
+              </div>
+              <div id="matchupNews" class="news-list"></div>
             </div>
           </section>
         </section>

@@ -4,6 +4,8 @@ const state = {
   signalDay: null,
   teamRoom: null,
   matchRoom: null,
+  squads: null,
+  matchupLab: null,
   competitions: [],
   matches: [],
   activeMatch: null
@@ -92,7 +94,9 @@ function captureSelection() {
   return {
     favoriteTeam: favoriteSelect?.value || state.teamRoom?.team || "",
     matchValue: matchOption?.value || state.matchRoom?.match?.eventId || "",
-    matchSignature: matchOption?.dataset?.signature || matchSignature(state.matchRoom?.match)
+    matchSignature: matchOption?.dataset?.signature || matchSignature(state.matchRoom?.match),
+    matchupHome: $("#matchupHomeSelect")?.value || state.matchupLab?.match?.home || "",
+    matchupAway: $("#matchupAwaySelect")?.value || state.matchupLab?.match?.away || ""
   };
 }
 
@@ -112,6 +116,7 @@ function selectPreferredOption(select, preferredValue, preferredSignature = "") 
 function switchView(id) {
   $$(".tab").forEach((item) => item.classList.toggle("active", item.dataset.view === id));
   $$(".view").forEach((view) => view.classList.toggle("active", view.id === id));
+  $(`.tab[data-view="${id}"]`)?.scrollIntoView({ block: "nearest", inline: "center" });
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -332,8 +337,8 @@ function renderNews(items, target) {
   `).join("");
 }
 
-function renderExpertNotes(expertMedia) {
-  const node = $("#expertNotes");
+function renderExpertNotes(expertMedia, target = "#expertNotes") {
+  const node = $(target);
   if (!node) return;
   const notes = expertMedia?.notes || [];
   if (!notes.length) {
@@ -420,18 +425,27 @@ function renderTeamRoom(data) {
   renderNews(data.news, "#teamNews");
 }
 
-function renderPrediction(prediction, match = {}) {
+function renderPrediction(prediction, match = {}, target = "#predictionChart", sourceLabels = {}) {
+  const node = $(target);
+  if (!node) return;
   if (!prediction?.probabilities) {
-    $("#predictionChart").innerHTML = `<div class="empty">No blended prediction available yet.</div>`;
+    node.innerHTML = `<div class="empty">No blended prediction available yet.</div>`;
     return;
   }
+  const labels = {
+    market: "Market",
+    squad: "Squad",
+    live: "Live",
+    expert: "Expert",
+    ...sourceLabels
+  };
   const probs = prediction.probabilities;
   const items = [
     { label: match.home || "Home", value: probs.home, display: `${probs.home}%` },
     { label: "Draw", value: probs.draw, display: `${probs.draw}%` },
     { label: match.away || "Away", value: probs.away, display: `${probs.away}%` }
   ];
-  $("#predictionChart").innerHTML = `
+  node.innerHTML = `
     <div class="probability-rings">
       ${items.map((item) => `
         <div class="prob-ring" style="--value:${item.value}">
@@ -446,16 +460,18 @@ function renderPrediction(prediction, match = {}) {
       <span>Confidence ${escapeHtml(prediction.confidence)} pts</span>
     </div>
     <div class="model-sources">
-      <span>Market ${escapeHtml(Math.round((prediction.components?.weights?.market || 0) * 100))}%</span>
-      <span>Squad ${escapeHtml(Math.round((prediction.components?.weights?.historicalSquad || 0) * 100))}%</span>
-      <span>Live ${escapeHtml(Math.round((prediction.components?.weights?.liveTournament || 0) * 100))}%</span>
-      <span>Expert ${escapeHtml(Math.round((prediction.components?.weights?.expertMedia || 0) * 100))}%</span>
+      <span>${escapeHtml(labels.market)} ${escapeHtml(Math.round((prediction.components?.weights?.market || 0) * 100))}%</span>
+      <span>${escapeHtml(labels.squad)} ${escapeHtml(Math.round((prediction.components?.weights?.historicalSquad || 0) * 100))}%</span>
+      <span>${escapeHtml(labels.live)} ${escapeHtml(Math.round((prediction.components?.weights?.liveTournament || 0) * 100))}%</span>
+      <span>${escapeHtml(labels.expert)} ${escapeHtml(Math.round((prediction.components?.weights?.expertMedia || 0) * 100))}%</span>
     </div>
     ${prediction.edges?.length ? `<div class="model-edges">${prediction.edges.map((edge) => `<p>${escapeHtml(edge)}</p>`).join("")}</div>` : ""}
   `;
 }
 
-function renderComparison(data) {
+function renderComparison(data, target = "#comparisonBars") {
+  const node = $(target);
+  if (!node) return;
   const home = data.profiles?.home || {};
   const away = data.profiles?.away || {};
   const match = data.match || {};
@@ -466,7 +482,7 @@ function renderComparison(data) {
     ["Total caps", home.totalCaps, away.totalCaps]
   ];
   const max = Math.max(1, ...rows.flatMap((row) => [Number(row[1] || 0), Number(row[2] || 0)]));
-  $("#comparisonBars").innerHTML = rows.map(([label, homeValue, awayValue]) => `
+  node.innerHTML = rows.map(([label, homeValue, awayValue]) => `
     <div class="compare-row">
       <span>${escapeHtml(label)}</span>
       <div class="compare-track">
@@ -519,6 +535,84 @@ function renderMatchRoom(data) {
   const awayPlayers = (data.keyPlayers?.away || []).slice(0, 5).map((player) => ({ ...player, tags: [`${match.away}`, ...(player.tags || [])] }));
   renderPlayerCards([...homePlayers, ...awayPlayers], "#matchPlayers");
   renderNews(data.news, "#matchNews");
+}
+
+function renderMatchupControls(selection = {}) {
+  const teams = state.squads?.teams || state.matchupLab?.teams || [];
+  const homeSelect = $("#matchupHomeSelect");
+  const awaySelect = $("#matchupAwaySelect");
+  if (!homeSelect || !awaySelect || !teams.length) return;
+
+  const makeOption = (team) => {
+    const option = document.createElement("option");
+    option.value = team.team;
+    option.textContent = `${team.team}${team.code ? ` · ${team.code}` : ""}`;
+    return option;
+  };
+
+  homeSelect.replaceChildren(...teams.map(makeOption));
+  awaySelect.replaceChildren(...teams.map(makeOption));
+  selectPreferredOption(homeSelect, selection.matchupHome || state.matchupLab?.match?.home || "Netherlands");
+  selectPreferredOption(awaySelect, selection.matchupAway || state.matchupLab?.match?.away || "Sweden");
+
+  if (homeSelect.value === awaySelect.value) {
+    const fallback = [...awaySelect.options].find((option) => option.value !== homeSelect.value);
+    if (fallback) awaySelect.value = fallback.value;
+  }
+}
+
+function renderMatchupLab(data) {
+  const match = data.match || {};
+  const summary = match.summary || {};
+  const score = data.prediction?.scorePrediction;
+  $("#matchupHero").innerHTML = `
+    <div class="match-side">
+      <span>${escapeHtml(summary.home?.abbreviation || "")}</span>
+      <h2>${escapeHtml(match.home)}</h2>
+      <small>Power ${escapeHtml(summary.environment?.homePower || 0)} · ${escapeHtml(summary.environment?.homeXg || 0)} xG</small>
+    </div>
+    <div class="match-center">
+      <p class="eyebrow">Match Lab</p>
+      <strong>${escapeHtml(match.home)} vs ${escapeHtml(match.away)}</strong>
+      ${score ? `
+        <div class="score-prediction">
+          <span>Score Prediction</span>
+          <b>${escapeHtml(score.label)}</b>
+          <small>May change as confidence grows throughout the game</small>
+        </div>
+      ` : ""}
+      <span>${escapeHtml(summary.venue || "Neutral scenario")}</span>
+      <small>${escapeHtml(score?.basis || "Historical and predicted scoring model")}</small>
+    </div>
+    <div class="match-side away-side">
+      <span>${escapeHtml(summary.away?.abbreviation || "")}</span>
+      <h2>${escapeHtml(match.away)}</h2>
+      <small>Power ${escapeHtml(summary.environment?.awayPower || 0)} · ${escapeHtml(summary.environment?.awayXg || 0)} xG</small>
+    </div>
+  `;
+
+  renderPrediction(data.prediction, match, "#matchupPredictionChart", {
+    market: "Market",
+    squad: "Squad",
+    live: "Scoring",
+    expert: "Media"
+  });
+  renderComparison(data, "#matchupComparisonBars");
+  $("#matchupAssumptions").innerHTML = (data.assumptions || []).length
+    ? data.assumptions.map((item) => `
+      <article class="assumption-card">
+        <strong>${escapeHtml(item.label)}</strong>
+        <b>${escapeHtml(item.value)}</b>
+        <p>${escapeHtml(item.detail)}</p>
+      </article>
+    `).join("")
+    : `<div class="empty">No model assumptions returned.</div>`;
+  renderExpertNotes(data.expertMedia, "#matchupExpertNotes");
+
+  const homePlayers = (data.keyPlayers?.home || []).slice(0, 5).map((player) => ({ ...player, tags: [`${match.home}`, ...(player.tags || [])] }));
+  const awayPlayers = (data.keyPlayers?.away || []).slice(0, 5).map((player) => ({ ...player, tags: [`${match.away}`, ...(player.tags || [])] }));
+  renderPlayerCards([...homePlayers, ...awayPlayers], "#matchupPlayers");
+  renderNews(data.news, "#matchupNews");
 }
 
 function encodeMatch(match) {
@@ -704,6 +798,30 @@ async function loadMatchRoom(options = {}) {
   renderMatchRoom(state.matchRoom);
 }
 
+async function loadSquads(options = {}) {
+  state.squads = await getJson("/api/squads", options);
+  renderMatchupControls(options.selection);
+}
+
+async function loadMatchupLab(options = {}) {
+  const homeSelect = $("#matchupHomeSelect");
+  const awaySelect = $("#matchupAwaySelect");
+  if (!homeSelect?.value || !awaySelect?.value) return;
+  if (homeSelect.value === awaySelect.value) {
+    const fallback = [...awaySelect.options].find((option) => option.value !== homeSelect.value);
+    if (fallback) awaySelect.value = fallback.value;
+  }
+  state.matchupLab = await getJson(
+    `/api/matchup-lab?home=${encodeURIComponent(homeSelect.value)}&away=${encodeURIComponent(awaySelect.value)}`,
+    options
+  );
+  renderMatchupControls({
+    matchupHome: state.matchupLab.match?.home || homeSelect.value,
+    matchupAway: state.matchupLab.match?.away || awaySelect.value
+  });
+  renderMatchupLab(state.matchupLab);
+}
+
 async function loadCompetitions(options = {}) {
   const result = await getJson("/api/statsbomb/competitions", options);
   state.competitions = result.competitions;
@@ -744,14 +862,14 @@ async function refreshAll(options = {}) {
     await Promise.all([
       loadSources(requestOptions),
       loadWorldcup26(requestOptions),
-      loadCompetitions(requestOptions),
       loadImages(requestOptions),
+      loadSquads({ ...requestOptions, selection }),
       loadSignalDay({ ...requestOptions, selection })
     ]);
     await Promise.all([
-      loadMatches(requestOptions),
       loadTeamRoom(requestOptions),
-      loadMatchRoom(requestOptions)
+      loadMatchRoom(requestOptions),
+      loadMatchupLab(requestOptions)
     ]);
     setStatus("Live");
   } catch (error) {
@@ -772,8 +890,9 @@ function bindEvents() {
     tab.addEventListener("click", () => switchView(tab.dataset.view));
   });
   $("#fixtureSearch").addEventListener("input", renderFixtures);
-  $("#competitionSelect").addEventListener("change", loadMatches);
-  $("#matchSelect").addEventListener("change", loadActiveMatch);
+  $("#matchupHomeSelect").addEventListener("change", loadMatchupLab);
+  $("#matchupAwaySelect").addEventListener("change", loadMatchupLab);
+  $("#runMatchupButton").addEventListener("click", loadMatchupLab);
   $("#favoriteTeamSelect").addEventListener("change", loadTeamRoom);
   $("#todayMatchSelect").addEventListener("change", loadMatchRoom);
   $("#openTeamButton").addEventListener("click", async () => {

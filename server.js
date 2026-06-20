@@ -482,6 +482,114 @@ function buildPredictionModel(match, homeProfile, awayProfile, summary, expertSi
   };
 }
 
+function topScorerPool(profile) {
+  return (profile?.topScorers || []).slice(0, 5).reduce((sum, player) => sum + Number(player.goals || 0), 0);
+}
+
+function matchupEnvironment(homeProfile, awayProfile) {
+  const homePower = squadPower(homeProfile);
+  const awayPower = squadPower(awayProfile);
+  const homeGoalDepth = Number(homeProfile?.totalGoals || 0) / Math.max(1, Number(homeProfile?.players || 26));
+  const awayGoalDepth = Number(awayProfile?.totalGoals || 0) / Math.max(1, Number(awayProfile?.players || 26));
+  const scorerPool = topScorerPool(homeProfile) + topScorerPool(awayProfile);
+  const experience = (Number(homeProfile?.averageCaps || 0) + Number(awayProfile?.averageCaps || 0)) / 2;
+  const totalGoals = clamp(
+    1.85 + (homeGoalDepth + awayGoalDepth) / 150 + scorerPool / 340 + experience / 170 + Math.abs(homePower - awayPower) / 210,
+    1.7,
+    4.2
+  );
+  const homeShare = clamp(
+    0.5 + (homePower - awayPower) / 175 + (homeGoalDepth - awayGoalDepth) / 320,
+    0.26,
+    0.74
+  );
+  const homeXg = Number((totalGoals * homeShare).toFixed(2));
+  const awayXg = Number((totalGoals - homeXg).toFixed(2));
+
+  return {
+    totalGoals: Number(totalGoals.toFixed(2)),
+    homeXg,
+    awayXg,
+    homePower: Number(homePower.toFixed(1)),
+    awayPower: Number(awayPower.toFixed(1)),
+    homeGoalDepth: Number(homeGoalDepth.toFixed(2)),
+    awayGoalDepth: Number(awayGoalDepth.toFixed(2)),
+    scorerPool
+  };
+}
+
+function matchupStatsBlock(teamName, teamCode, projectedFor, projectedAgainst, profile) {
+  const goalDifference = Number((projectedFor - projectedAgainst).toFixed(2));
+  return {
+    name: teamName,
+    abbreviation: teamCode || teamName.slice(0, 3).toUpperCase(),
+    logo: null,
+    stats: [
+      { name: "totalGoals", label: "Total Goals", value: projectedFor, displayValue: projectedFor.toFixed(2) },
+      { name: "goalsConceded", label: "Goals Against", value: projectedAgainst, displayValue: projectedAgainst.toFixed(2) },
+      { name: "goalAssists", label: "Assists", value: Number((projectedFor * 0.72).toFixed(2)), displayValue: Number((projectedFor * 0.72).toFixed(2)).toFixed(2) },
+      { name: "goalDifference", label: "Goal Difference", value: goalDifference, displayValue: goalDifference.toFixed(2) },
+      { name: "averageCaps", label: "Average Caps", value: Number(profile?.averageCaps || 0), displayValue: String(profile?.averageCaps || 0) },
+      { name: "squadGoals", label: "Squad Goals", value: Number(profile?.totalGoals || 0), displayValue: String(profile?.totalGoals || 0) }
+    ]
+  };
+}
+
+function buildMatchupSummary(match, homeSquad, awaySquad, homeProfile, awayProfile) {
+  const environment = matchupEnvironment(homeProfile, awayProfile);
+  return {
+    eventId: null,
+    date: null,
+    status: "Assumption lab",
+    venue: "Neutral scenario model",
+    broadcasts: ["Model refresh recalculates media and scoring priors"],
+    odds: {
+      provider: "Signal Room scoring prior",
+      overUnder: environment.totalGoals,
+      probabilities: null
+    },
+    home: matchupStatsBlock(match.home, homeSquad?.code, environment.homeXg, environment.awayXg, homeProfile),
+    away: matchupStatsBlock(match.away, awaySquad?.code, environment.awayXg, environment.homeXg, awayProfile),
+    environment
+  };
+}
+
+function buildMatchupAssumptions(match, summary, prediction) {
+  const environment = summary?.environment || {};
+  return [
+    {
+      label: "Scenario",
+      value: "Neutral matchup",
+      detail: "This is not an official fixture unless the schedule feed maps the same teams."
+    },
+    {
+      label: "Scoring prior",
+      value: `${environment.totalGoals || prediction?.scorePrediction?.expectedGoals?.total || 2.5} expected goals`,
+      detail: `${match.home} ${environment.homeXg || 0} xG, ${match.away} ${environment.awayXg || 0} xG before score rounding.`
+    },
+    {
+      label: "Power signal",
+      value: `${match.home} ${environment.homePower || 0} vs ${match.away} ${environment.awayPower || 0}`,
+      detail: "Squad power blends average caps, total squad goals, top scorer output, and height."
+    },
+    {
+      label: "Confidence growth",
+      value: `${prediction?.confidence || 0} pts`,
+      detail: "Refresh can move the prediction when public expert notes or updated source data change."
+    }
+  ];
+}
+
+function squadTeamOptions(squads) {
+  return [...(squads?.teams || [])]
+    .map((team) => ({
+      team: team.team,
+      code: team.code,
+      coach: team.coach?.coachName || ""
+    }))
+    .sort((a, b) => a.team.localeCompare(b.team));
+}
+
 function decodeXml(value) {
   return compact(value)
     .replace(/<!\[CDATA\[(.*?)\]\]>/gs, "$1")
@@ -1491,6 +1599,74 @@ async function handleApi(req, res, url) {
         todayMatch: match,
         expertMedia: match?.expertMedia || null,
         opponent: opponentName,
+        news
+      });
+      return;
+    }
+
+    if (url.pathname === "/api/matchup-lab") {
+      const squads = await getSquads();
+      const requestedHome = url.searchParams.get("home") || "Netherlands";
+      const requestedAway = url.searchParams.get("away") || "Sweden";
+      const homeSquad = findSquad(squads, requestedHome) || squads.teams[0];
+      let awaySquad = findSquad(squads, requestedAway) || squads.teams.find((team) => teamKey(team.team) !== teamKey(homeSquad?.team));
+
+      if (!homeSquad || !awaySquad) {
+        jsonResponse(res, 404, { error: "Not enough squads available for matchup modeling" });
+        return;
+      }
+
+      if (teamKey(homeSquad.team) === teamKey(awaySquad.team)) {
+        awaySquad = squads.teams.find((team) => teamKey(team.team) !== teamKey(homeSquad.team));
+      }
+
+      if (!awaySquad) {
+        badRequest(res, "Choose two different teams");
+        return;
+      }
+
+      const match = {
+        eventId: null,
+        group: "Lab",
+        localDate: null,
+        gmt: null,
+        home: homeSquad.team,
+        away: awaySquad.team
+      };
+      const homeProfile = squadStats(homeSquad);
+      const awayProfile = squadStats(awaySquad);
+      const summary = buildMatchupSummary(match, homeSquad, awaySquad, homeProfile, awayProfile);
+      const [expertMedia, news] = await Promise.all([
+        fetchExpertMedia(match, summary, 12).catch(() => buildExpertSignal(match, [])),
+        fetchGoogleNews(`${match.home} ${match.away} World Cup 2026 prediction preview squad news`, 10).catch(() => [])
+      ]);
+      const prediction = buildPredictionModel(match, homeProfile, awayProfile, summary, expertMedia);
+      prediction.label = expertMedia?.noteCount >= 3
+        ? "Signal Room high-likelihood matchup model"
+        : "Signal Room neutral matchup model";
+      prediction.scorePrediction.basis = "FIFA squad history, projected scoring environment, and public expert-media sentiment";
+
+      jsonResponse(res, 200, {
+        fetchedAt: new Date().toISOString(),
+        source: ["FIFA squad PDF", "Signal Room scoring prior", "Google News RSS", "Expert media sentiment"],
+        teams: squadTeamOptions(squads),
+        match: { ...match, summary },
+        squads: {
+          home: homeSquad,
+          away: awaySquad
+        },
+        profiles: {
+          home: homeProfile,
+          away: awayProfile
+        },
+        keyPlayers: {
+          home: buildPlayerInsights(homeSquad, awaySquad),
+          away: buildPlayerInsights(awaySquad, homeSquad)
+        },
+        uncommonInsights: buildUncommonInsights(match, homeSquad, awaySquad),
+        prediction,
+        assumptions: buildMatchupAssumptions(match, summary, prediction),
+        expertMedia,
         news
       });
       return;

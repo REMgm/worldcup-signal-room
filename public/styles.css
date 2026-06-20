@@ -291,6 +291,7 @@ h3 {
 .tabbar {
   gap: 8px;
   overflow-x: auto;
+  scroll-padding-inline: 12px;
 }
 
 .tab {
@@ -672,6 +673,7 @@ tbody tr:hover {
   font-size: 2.5rem;
   line-height: 1;
   text-transform: uppercase;
+  overflow-wrap: anywhere;
 }
 
 .hero-score {
@@ -1085,6 +1087,29 @@ tbody tr:hover {
   background: #10120e;
 }
 
+.assumption-card {
+  display: grid;
+  gap: 5px;
+}
+
+.assumption-card strong {
+  color: var(--away);
+  font-size: 0.76rem;
+  text-transform: uppercase;
+}
+
+.assumption-card b {
+  color: var(--text);
+  font-size: 1rem;
+}
+
+.assumption-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
 .control-strip {
   gap: 12px;
   padding: 14px;
@@ -1094,6 +1119,10 @@ tbody tr:hover {
   border-radius: var(--radius);
   margin-bottom: 14px;
   box-shadow: var(--shadow);
+}
+
+.control-strip .primary-button {
+  align-self: end;
 }
 
 .field {
@@ -1393,6 +1422,18 @@ tbody tr:hover {
   .nav-row {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .tabbar {
+    width: 100%;
+  }
+
+  .tab {
+    flex: 0 0 auto;
+  }
+
+  .control-strip .primary-button {
+    width: 100%;
   }
 
   .brand-mark {
