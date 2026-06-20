@@ -923,13 +923,19 @@ function compactSummary(summary) {
   const venue = competition.venue || summary.gameInfo?.venue || {};
   const homeName = home.team?.displayName || competition.competitors?.[0]?.team?.displayName;
   const awayName = away.team?.displayName || competition.competitors?.[1]?.team?.displayName;
+  const status = competition.status || summary.header.competitions?.[0]?.status || {};
+  const statusType = status.type || {};
 
   return {
     eventId: summary.header.id,
     name: summary.header.name || `${awayName} at ${homeName}`,
     shortName: summary.header.shortName,
     date: summary.header.competitions?.[0]?.date || summary.header.date,
-    status: competition.status?.type?.description || summary.header.competitions?.[0]?.status?.type?.description || "Scheduled",
+    status: statusType.description || "Scheduled",
+    statusDetail: statusType.detail || statusType.shortDetail || status.displayClock || statusType.description || "Scheduled",
+    statusState: statusType.state || "",
+    clock: status.displayClock || "",
+    period: status.period || 0,
     venue: venue.fullName || venue.name || "Venue TBA",
     city: venue.address?.city || venue.address?.state || "",
     home: {
@@ -979,6 +985,57 @@ function compactSummary(summary) {
 async function fetchEspnSummary(eventId) {
   const result = await fetchJson(`${ESPN_BASE}/summary?event=${eventId}`, { ttl: 1000 * 60 * 3 });
   return result.data;
+}
+
+function liveScoreFromSummary(summary, source = "ESPN public API") {
+  if (!summary?.home || !summary?.away) {
+    return {
+      available: false,
+      source,
+      label: "No live fixture",
+      status: "No live fixture",
+      detail: "No ESPN event mapped",
+      home: null,
+      away: null,
+      homeScore: null,
+      awayScore: null,
+      isLive: false,
+      isFinal: false
+    };
+  }
+
+  const status = summary.status || "Scheduled";
+  const state = String(summary.statusState || "").toLowerCase();
+  const detail = summary.statusDetail || summary.clock || status;
+  const homeScore = summary.home.score ?? "0";
+  const awayScore = summary.away.score ?? "0";
+  return {
+    available: true,
+    source,
+    label: `${homeScore}-${awayScore}`,
+    status,
+    detail,
+    clock: summary.clock || "",
+    period: summary.period || 0,
+    home: summary.home.name,
+    away: summary.away.name,
+    homeScore,
+    awayScore,
+    isLive: state === "in" || /in progress|halftime|half time|live/i.test(`${status} ${detail}`),
+    isFinal: state === "post" || /final|full time/i.test(`${status} ${detail}`)
+  };
+}
+
+async function findLiveMatchForTeams(dateKey, homeName, awayName) {
+  const events = await fetchEspnScoreboards(dateKey).catch(() => []);
+  const event = findEventForMatch(events, { home: homeName, away: awayName, team1: homeName, team2: awayName });
+  if (!event?.id) return null;
+  const summary = compactSummary(await fetchEspnSummary(event.id));
+  return {
+    eventId: event.id,
+    summary,
+    liveScore: liveScoreFromSummary(summary)
+  };
 }
 
 async function fetchEspnScoreboards(dateKey) {
@@ -1067,6 +1124,7 @@ async function buildSignalDay(dateKey = "20260620") {
       home: resolvedMatch.home,
       away: resolvedMatch.away,
       summary,
+      liveScore: liveScoreFromSummary(summary),
       predictionModel,
       expertMedia,
       squadSignals: {
@@ -1606,6 +1664,7 @@ async function handleApi(req, res, url) {
 
     if (url.pathname === "/api/matchup-lab") {
       const squads = await getSquads();
+      const dateKey = url.searchParams.get("date") || "20260620";
       const requestedHome = url.searchParams.get("home") || "Netherlands";
       const requestedAway = url.searchParams.get("away") || "Sweden";
       const homeSquad = findSquad(squads, requestedHome) || squads.teams[0];
@@ -1636,9 +1695,10 @@ async function handleApi(req, res, url) {
       const homeProfile = squadStats(homeSquad);
       const awayProfile = squadStats(awaySquad);
       const summary = buildMatchupSummary(match, homeSquad, awaySquad, homeProfile, awayProfile);
-      const [expertMedia, news] = await Promise.all([
+      const [expertMedia, news, liveFixture] = await Promise.all([
         fetchExpertMedia(match, summary, 12).catch(() => buildExpertSignal(match, [])),
-        fetchGoogleNews(`${match.home} ${match.away} World Cup 2026 prediction preview squad news`, 10).catch(() => [])
+        fetchGoogleNews(`${match.home} ${match.away} World Cup 2026 prediction preview squad news`, 10).catch(() => []),
+        findLiveMatchForTeams(dateKey, match.home, match.away).catch(() => null)
       ]);
       const prediction = buildPredictionModel(match, homeProfile, awayProfile, summary, expertMedia);
       prediction.label = expertMedia?.noteCount >= 3
@@ -1666,6 +1726,15 @@ async function handleApi(req, res, url) {
         uncommonInsights: buildUncommonInsights(match, homeSquad, awaySquad),
         prediction,
         assumptions: buildMatchupAssumptions(match, summary, prediction),
+        liveScore: liveFixture?.liveScore || liveScoreFromSummary(null),
+        liveFixture: liveFixture ? {
+          eventId: liveFixture.eventId,
+          match: {
+            home: liveFixture.summary?.home?.name,
+            away: liveFixture.summary?.away?.name,
+            gmt: gmtFromIso(liveFixture.summary?.date)
+          }
+        } : null,
         expertMedia,
         news
       });
@@ -1709,6 +1778,7 @@ async function handleApi(req, res, url) {
         },
         uncommonInsights: buildUncommonInsights(match, homeSquad, awaySquad),
         prediction,
+        liveScore: liveScoreFromSummary(summary),
         expertMedia,
         market: summary?.odds || null,
         news

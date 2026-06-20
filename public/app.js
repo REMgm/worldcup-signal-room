@@ -6,6 +6,7 @@ const state = {
   matchRoom: null,
   squads: null,
   matchupLab: null,
+  matchupRequestId: 0,
   competitions: [],
   matches: [],
   activeMatch: null
@@ -235,11 +236,14 @@ function renderTodayMatches() {
     const expert = prediction?.components?.expertMedia || match.expertMedia;
     const homeProb = prediction?.probabilities?.home;
     const awayProb = prediction?.probabilities?.away;
+    const drawProb = prediction?.probabilities?.draw;
+    const projectedScore = prediction?.scorePrediction;
     card.innerHTML = `
       <div class="today-card-top">
         <span>${escapeHtml(match.group ? `Group ${match.group}` : "Match")}</span>
         <strong>${escapeHtml(matchGmtLabel(match))}</strong>
       </div>
+      ${liveScoreMarkup(match.liveScore, true)}
       <div class="team-line">
         ${match.summary?.home?.logo ? `<img src="${escapeHtml(match.summary.home.logo)}" alt="">` : ""}
         <b>${escapeHtml(match.home)}</b>
@@ -252,6 +256,11 @@ function renderTodayMatches() {
       <div class="mini-prob">
         <span style="width:${homeProb || 50}%"></span>
         <i style="width:${awayProb || 50}%"></i>
+      </div>
+      <div class="today-prediction">
+        <span>Prediction</span>
+        <strong>${escapeHtml(projectedScore?.label || "Prediction pending")}</strong>
+        <small>${escapeHtml(match.home)} ${escapeHtml(homeProb || 0)}% · Draw ${escapeHtml(drawProb || 0)}% · ${escapeHtml(match.away)} ${escapeHtml(awayProb || 0)}%</small>
       </div>
       <div class="today-card-meta">${prediction ? `Favorite: ${escapeHtml(prediction.favorite)} · ${escapeHtml(prediction.confidence)} confidence` : "Prediction data pending"}</div>
       <div class="today-card-meta">${odds ? `${escapeHtml(odds.provider || "Odds")} market blended with squad history` : "Historical squad model only"}</div>
@@ -307,6 +316,22 @@ function statCard(label, value, note = "") {
   return `<div class="stat"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong>${note ? `<em>${escapeHtml(note)}</em>` : ""}</div>`;
 }
 
+function liveScoreMarkup(liveScore, compact = false) {
+  const score = liveScore || {};
+  const mode = score.isLive ? "live" : score.isFinal ? "final" : score.available ? "scheduled" : "empty";
+  const label = score.isLive ? "Live Score" : score.isFinal ? "Final Score" : score.available ? "Real-time Score" : "Real-time Score";
+  const value = score.available ? `${score.homeScore ?? 0}-${score.awayScore ?? 0}` : "No live fixture";
+  const teams = score.available && !compact ? `<small>${escapeHtml(score.home || "")} vs ${escapeHtml(score.away || "")}</small>` : "";
+  return `
+    <div class="live-score ${mode}">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      <em>${escapeHtml(score.detail || score.status || "No ESPN event mapped")}</em>
+      ${teams}
+    </div>
+  `;
+}
+
 function renderBars(items, colorClass = "") {
   const max = Math.max(1, ...items.map((item) => Number(item.value || item.count || 0)));
   return items.map((item) => {
@@ -319,6 +344,58 @@ function renderBars(items, colorClass = "") {
       </div>
     `;
   }).join("");
+}
+
+function positionCount(profile, code) {
+  return Number(profile?.positions?.[code] || 0);
+}
+
+function renderPositionPitch(profile = {}, teamName = "Team") {
+  const rows = [
+    { code: "FW", label: "Attack", y: 18, x: 50 },
+    { code: "MF", label: "Midfield", y: 42, x: 50 },
+    { code: "DF", label: "Defense", y: 66, x: 50 },
+    { code: "GK", label: "Keeper", y: 86, x: 50 }
+  ];
+  const total = Math.max(1, rows.reduce((sum, row) => sum + positionCount(profile, row.code), 0));
+  return `
+    <article class="position-pitch-card">
+      <div class="position-head">
+        <span>${escapeHtml(teamName)}</span>
+        <b>${escapeHtml(total)} players mapped</b>
+      </div>
+      <div class="position-pitch" role="img" aria-label="${escapeHtml(teamName)} squad position map">
+        ${rows.map((row) => {
+          const count = positionCount(profile, row.code);
+          const size = 44 + count * 3;
+          return `
+            <div class="position-node ${escapeHtml(row.code.toLowerCase())}" style="--x:${row.x}; --y:${row.y}; --size:${size}px">
+              <strong>${escapeHtml(row.code)}</strong>
+              <span>${escapeHtml(count)}</span>
+            </div>
+          `;
+        }).join("")}
+      </div>
+      <div class="position-split">
+        ${rows.map((row) => {
+          const count = positionCount(profile, row.code);
+          return `<span>${escapeHtml(row.label)} <b>${escapeHtml(Math.round((count / total) * 100))}%</b></span>`;
+        }).join("")}
+      </div>
+    </article>
+  `;
+}
+
+function renderPositionVisual(data, target) {
+  const node = $(target);
+  if (!node) return;
+  const match = data.match || {};
+  node.innerHTML = `
+    <div class="position-map-grid">
+      ${renderPositionPitch(data.profiles?.home, match.home || "Home")}
+      ${renderPositionPitch(data.profiles?.away, match.away || "Away")}
+    </div>
+  `;
 }
 
 function renderNews(items, target) {
@@ -398,6 +475,7 @@ function renderTeamRoom(data) {
     <div class="hero-score">
       <span>Today</span>
       <strong>${match ? `${escapeHtml(match.home)} vs ${escapeHtml(match.away)}` : "No match today"}</strong>
+      ${match ? liveScoreMarkup(match.liveScore, true) : ""}
       <small>${escapeHtml(match ? matchGmtLabel(match) : "")} · ${escapeHtml(match?.summary?.venue || "")}</small>
     </div>
   `;
@@ -416,6 +494,7 @@ function renderTeamRoom(data) {
   const scorers = (profile.topScorers || []).map((player) => ({ label: player.shirtName || player.playerName, value: player.goals, display: player.goals }));
   const clubs = (profile.clubSpread || []).map((item) => ({ label: item.country, value: item.count, display: item.count }));
   $("#teamCharts").innerHTML = `
+    <div class="chart-block">${renderPositionPitch(profile, data.team)}</div>
     <div class="chart-block"><h3>Position Mix</h3>${renderBars(positions)}</div>
     <div class="chart-block"><h3>Goal Sources</h3>${renderBars(scorers, "warm")}</div>
     <div class="chart-block"><h3>Club Country Spread</h3>${renderBars(clubs, "cool")}</div>
@@ -507,6 +586,7 @@ function renderMatchRoom(data) {
     <div class="match-center">
       <p class="eyebrow">Match Deep Dive</p>
       <strong>${escapeHtml(matchGmtLabel(match))}</strong>
+      ${liveScoreMarkup(data.liveScore || match.liveScore, true)}
       ${score ? `
         <div class="score-prediction">
           <span>Score Prediction</span>
@@ -526,6 +606,7 @@ function renderMatchRoom(data) {
 
   renderPrediction(data.prediction, match);
   renderComparison(data);
+  renderPositionVisual(data, "#matchPositionMap");
   $("#uncommonInsights").innerHTML = (data.uncommonInsights || []).length
     ? data.uncommonInsights.map((item) => `<article>${escapeHtml(item)}</article>`).join("")
     : `<div class="empty">No uncommon cross-source signals generated.</div>`;
@@ -574,6 +655,7 @@ function renderMatchupLab(data) {
     <div class="match-center">
       <p class="eyebrow">Match Lab</p>
       <strong>${escapeHtml(match.home)} vs ${escapeHtml(match.away)}</strong>
+      ${liveScoreMarkup(data.liveScore, true)}
       ${score ? `
         <div class="score-prediction">
           <span>Score Prediction</span>
@@ -598,6 +680,7 @@ function renderMatchupLab(data) {
     expert: "Media"
   });
   renderComparison(data, "#matchupComparisonBars");
+  renderPositionVisual(data, "#matchupPositionMap");
   $("#matchupAssumptions").innerHTML = (data.assumptions || []).length
     ? data.assumptions.map((item) => `
       <article class="assumption-card">
@@ -811,13 +894,19 @@ async function loadMatchupLab(options = {}) {
     const fallback = [...awaySelect.options].find((option) => option.value !== homeSelect.value);
     if (fallback) awaySelect.value = fallback.value;
   }
-  state.matchupLab = await getJson(
-    `/api/matchup-lab?home=${encodeURIComponent(homeSelect.value)}&away=${encodeURIComponent(awaySelect.value)}`,
+  const requestId = state.matchupRequestId + 1;
+  state.matchupRequestId = requestId;
+  const home = homeSelect.value;
+  const away = awaySelect.value;
+  const result = await getJson(
+    `/api/matchup-lab?date=${DEFAULT_DATE}&home=${encodeURIComponent(home)}&away=${encodeURIComponent(away)}`,
     options
   );
+  if (requestId !== state.matchupRequestId) return;
+  state.matchupLab = result;
   renderMatchupControls({
-    matchupHome: state.matchupLab.match?.home || homeSelect.value,
-    matchupAway: state.matchupLab.match?.away || awaySelect.value
+    matchupHome: state.matchupLab.match?.home || home,
+    matchupAway: state.matchupLab.match?.away || away
   });
   renderMatchupLab(state.matchupLab);
 }
