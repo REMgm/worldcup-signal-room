@@ -7,6 +7,7 @@ const PORT = Number(process.env.PORT || 4173);
 const ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const PUBLIC_DIR = join(ROOT, "public");
 const SQUADS_PATH = join(ROOT, "data", "squads-2026.json");
+const RESULTS_PATH = join(ROOT, "data", "signal-room-results-2026.json");
 const REZA_REPO_DIR = join(ROOT, "data", "worldcup-source");
 const REZA_RAW_BASE = "https://raw.githubusercontent.com/rezarahiminia/worldcup2026/main";
 const STATSBOMB_BASE = "https://raw.githubusercontent.com/statsbomb/open-data/master/data";
@@ -90,12 +91,15 @@ async function fetchJson(url, options = {}) {
     return { ...cached.value, cached: true };
   }
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 10000);
   const response = await fetch(url, {
+    signal: controller.signal,
     headers: {
       "accept": "application/json,text/plain,*/*",
       "user-agent": "WorldCupMomentumDashboard/1.0"
     }
-  });
+  }).finally(() => clearTimeout(timeout));
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
@@ -122,13 +126,16 @@ async function fetchJsonWithHeaders(url, headers, options = {}) {
     return { ...cached.value, cached: true };
   }
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 10000);
   const response = await fetch(url, {
+    signal: controller.signal,
     headers: {
       "accept": "application/json,text/plain,*/*",
       "user-agent": "WorldCupMomentumDashboard/1.0",
       ...headers
     }
-  });
+  }).finally(() => clearTimeout(timeout));
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
@@ -155,9 +162,12 @@ async function fetchText(url, options = {}) {
     return { ...cached.value, cached: true };
   }
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 10000);
   const response = await fetch(url, {
+    signal: controller.signal,
     headers: { "user-agent": "WorldCupMomentumDashboard/1.0" }
-  });
+  }).finally(() => clearTimeout(timeout));
 
   if (!response.ok) {
     const error = new Error(`Fetch failed ${response.status}`);
@@ -940,7 +950,7 @@ function parseRssItems(xml, limit = 8) {
 async function fetchGoogleNews(query, limit = 6) {
   const rss = await fetchText(
     `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`,
-    { ttl: 1000 * 60 * 12 }
+    { ttl: 1000 * 60 * 12, timeoutMs: 3000 }
   );
   return parseRssItems(rss.text, limit);
 }
@@ -1104,9 +1114,31 @@ async function readJsonFile(path) {
   return JSON.parse(await readFile(path, "utf8"));
 }
 
+async function getResultArchive() {
+  const key = "local:signal-room-results-2026";
+  const cached = cache.get(key);
+  if (cached && Date.now() - cached.at < CACHE_MS) return cached.value;
+  const results = await readJsonFile(RESULTS_PATH).catch(() => []);
+  cache.set(key, { at: Date.now(), value: results });
+  return results;
+}
+
+function archivedResultForGame(game, results = []) {
+  const matchId = String(game?.id || game?.match_id || "");
+  const direct = results.find((result) => String(result.match_id || "") === matchId);
+  if (direct) return direct;
+  const home = teamKey(game?.home_team_name_en || game?.home);
+  const away = teamKey(game?.away_team_name_en || game?.away);
+  return results.find((result) => {
+    const resultHome = teamKey(result.home);
+    const resultAway = teamKey(result.away);
+    return resultHome === home && resultAway === away;
+  }) || null;
+}
+
 async function readWorldcupSourceFile(filename) {
   try {
-    const result = await fetchJson(`${REZA_RAW_BASE}/${filename}`, { ttl: CACHE_MS });
+    const result = await fetchJson(`${REZA_RAW_BASE}/${filename}`, { ttl: CACHE_MS, timeoutMs: 2500 });
     return result.data;
   } catch {
     return readJsonFile(join(REZA_REPO_DIR, filename));
@@ -1118,12 +1150,13 @@ async function getWorldcupRepoData() {
   const cached = cache.get(key);
   if (cached && Date.now() - cached.at < CACHE_MS) return cached.value;
 
-  const [matches, teams, stadiums, groups, openFootball] = await Promise.all([
+  const [matches, teams, stadiums, groups, openFootball, resultArchive] = await Promise.all([
     readWorldcupSourceFile("football.matches.json"),
     readWorldcupSourceFile("football.teams.json"),
     readWorldcupSourceFile("football.stadiums.json"),
     readWorldcupSourceFile("football.matchtables.json"),
-    fetchJson(OPENFOOTBALL_2026, { ttl: CACHE_MS }).catch(() => ({ data: { matches: [] } }))
+    fetchJson(OPENFOOTBALL_2026, { ttl: CACHE_MS, timeoutMs: 2500 }).catch(() => ({ data: { matches: [] } })),
+    getResultArchive()
   ]);
 
   const teamsById = Object.fromEntries(teams.map((team) => [String(team.id), team]));
@@ -1141,10 +1174,21 @@ async function getWorldcupRepoData() {
     const gmt = openFootballMatch
       ? gmtFromOpenFootball(openFootballMatch.date, openFootballMatch.time)
       : gmtFromRepoLocalDate(match.local_date, stadium);
+    const result = archivedResultForGame({
+      ...match,
+      home_team_name_en: homeTeam?.name_en,
+      away_team_name_en: awayTeam?.name_en
+    }, resultArchive);
     return {
       ...match,
       home_team_name_en: homeTeam?.name_en,
       away_team_name_en: awayTeam?.name_en,
+      home_score: result ? String(result.home_score) : match.home_score,
+      away_score: result ? String(result.away_score) : match.away_score,
+      finished: result ? "TRUE" : match.finished,
+      time_elapsed: result ? "final" : match.time_elapsed,
+      result_status: result?.status || "",
+      result_source: result?.source || "",
       home_team_code: homeTeam?.fifa_code,
       away_team_code: awayTeam?.fifa_code,
       home_flag: homeTeam?.flag,
@@ -1161,6 +1205,10 @@ async function getWorldcupRepoData() {
   const payload = {
     repo: "rezarahiminia/worldcup2026",
     commit: "a2908f1acfc74ce54a23ff188be909695550ea20",
+    resultArchive: {
+      source: "Signal Room momentum plot archive",
+      matches: resultArchive.length
+    },
     games: enrichedMatches,
     teams,
     groups,
@@ -1456,7 +1504,21 @@ function liveScoreFromSummary(summary, source = "ESPN public API") {
 async function findLiveMatchForTeams(dateKey, homeName, awayName) {
   const events = await fetchEspnScoreboards(dateKey).catch(() => []);
   const event = findEventForMatch(events, { home: homeName, away: awayName, team1: homeName, team2: awayName });
-  if (!event?.id) return null;
+  if (!event?.id) {
+    const repo = await getWorldcupRepoData().catch(() => null);
+    const archivedGame = (repo?.games || []).find((game) =>
+      gameDateKey(game) === dateKey &&
+      ((teamKey(game.home_team_name_en) === teamKey(homeName) && teamKey(game.away_team_name_en) === teamKey(awayName)) ||
+      (teamKey(game.home_team_name_en) === teamKey(awayName) && teamKey(game.away_team_name_en) === teamKey(homeName))) &&
+      gameHasFinalResult(game)
+    );
+    const summary = summaryFromGameResult(archivedGame);
+    return summary ? {
+      eventId: summary.eventId,
+      summary,
+      liveScore: liveScoreFromSummary(summary, "Signal Room result archive")
+    } : null;
+  }
   const summary = compactSummary(await fetchEspnSummary(event.id));
   return {
     eventId: event.id,
@@ -1468,7 +1530,7 @@ async function findLiveMatchForTeams(dateKey, homeName, awayName) {
 async function fetchEspnScoreboards(dateKey) {
   const keys = [dateKey, nextDateKey(dateKey)];
   const results = await Promise.all(
-    keys.map((key) => fetchJson(`${ESPN_BASE}/scoreboard?dates=${key}&limit=100`, { ttl: 1000 * 60 * 3 }).catch(() => ({ data: { events: [] } })))
+    keys.map((key) => fetchJson(`${ESPN_BASE}/scoreboard?dates=${key}&limit=100`, { ttl: 1000 * 60 * 3, timeoutMs: 3000 }).catch(() => ({ data: { events: [] } })))
   );
   return results.flatMap((result) => result.data.events || []);
 }
@@ -1484,7 +1546,7 @@ function findEventForMatch(events, match) {
 }
 
 async function fetchEspnScoreboardDate(dateKey) {
-  const result = await fetchJson(`${ESPN_BASE}/scoreboard?dates=${dateKey}&limit=100`, { ttl: 1000 * 60 * 3 })
+  const result = await fetchJson(`${ESPN_BASE}/scoreboard?dates=${dateKey}&limit=100`, { ttl: 1000 * 60 * 3, timeoutMs: 3000 })
     .catch(() => ({ data: { events: [] } }));
   return result.data.events || [];
 }
@@ -1499,10 +1561,57 @@ function knownFixture(game) {
   return Boolean(game?.home_team_name_en && game?.away_team_name_en);
 }
 
+function gameHasFinalResult(game) {
+  const hasScores = game?.home_score !== null && game?.away_score !== null
+    && game?.home_score !== undefined && game?.away_score !== undefined;
+  return Boolean(hasScores && (game?.finished === true || game?.finished === "TRUE" || game?.result_source));
+}
+
 function eventCompleted(event) {
   const status = event?.competitions?.[0]?.status || event?.status || {};
   const type = status.type || {};
   return Boolean(type.completed || type.state === "post" || /final/i.test(type.description || type.detail || type.shortDetail || ""));
+}
+
+function summaryFromGameResult(game) {
+  if (!gameHasFinalResult(game)) return null;
+  return {
+    eventId: game.id ? `archive-${game.id}` : null,
+    name: `${game.home_team_name_en} vs ${game.away_team_name_en}`,
+    shortName: `${game.home_team_name_en} vs ${game.away_team_name_en}`,
+    date: game.gmt?.iso || null,
+    status: game.result_status || "Final",
+    statusDetail: game.result_source || "Signal Room result archive",
+    statusState: "post",
+    clock: "",
+    period: 2,
+    venue: game.stadium_name || "Venue TBA",
+    city: game.city_en || "",
+    home: {
+      name: game.home_team_name_en,
+      abbreviation: game.home_team_code,
+      logo: game.home_flag,
+      score: String(game.home_score ?? "0"),
+      stats: []
+    },
+    away: {
+      name: game.away_team_name_en,
+      abbreviation: game.away_team_code,
+      logo: game.away_flag,
+      score: String(game.away_score ?? "0"),
+      stats: []
+    },
+    broadcasts: [],
+    odds: null,
+    form: [],
+    headToHead: [],
+    standings: null,
+    leaders: [],
+    lineups: [],
+    news: [],
+    videos: [],
+    archivedResult: true
+  };
 }
 
 function compactScoreboardSummary(event) {
@@ -1672,14 +1781,14 @@ async function buildQipAuditRows(dateKey = todayDateKey(), worldcupRepo = null, 
   const completedPairs = knownGames
     .filter((game) => gameDateKey(game) <= dateKey)
     .map((game) => ({ game, event: findEventForMatch(events, game) }))
-    .filter(({ event }) => eventCompleted(event));
+    .filter(({ game, event }) => eventCompleted(event) || gameHasFinalResult(game));
 
   const summaries = await Promise.all(completedPairs.map(({ event }) =>
     event?.id ? fetchEspnSummary(event.id).then(compactSummary).catch(() => compactScoreboardSummary(event)) : null
   ));
 
   const audit = completedPairs.map(({ game, event }, index) => {
-    const summary = summaries[index] || compactScoreboardSummary(event);
+    const summary = summaries[index] || (event ? compactScoreboardSummary(event) : summaryFromGameResult(game));
     const { match, prediction, summary: alignedSummary } = signalPredictionForGame(game, squadData, summary);
     const homeScore = Number(alignedSummary?.home?.score ?? 0);
     const awayScore = Number(alignedSummary?.away?.score ?? 0);
@@ -1705,7 +1814,8 @@ async function buildQipAuditRows(dateKey = todayDateKey(), worldcupRepo = null, 
       probabilities: prediction.probabilities,
       weights: prediction.components?.weights || {},
       brier,
-      status: alignedSummary?.status || "Final"
+      status: alignedSummary?.status || "Final",
+      source: alignedSummary?.archivedResult ? "Signal Room result archive" : "ESPN public API"
     };
   }).sort((a, b) => String(a.gmt?.iso || "").localeCompare(String(b.gmt?.iso || "")));
 
@@ -1955,7 +2065,7 @@ async function buildSignals(dateKey = todayDateKey()) {
   return {
     fetchedAt: new Date().toISOString(),
     dateKey,
-    source: ["Signal Room prediction model", "ESPN public API finals", "rezarahiminia/worldcup2026", "FIFA squad PDF"],
+    source: ["Signal Room prediction model", "Signal Room result archive", "ESPN public API finals", "rezarahiminia/worldcup2026", "FIFA squad PDF"],
     method: "QIP refresh-time reconstruction. Completed results become calibration lessons for the next prediction pass.",
     qip: {
       active: qipState.active,
@@ -2237,7 +2347,7 @@ async function buildKnockoutProjection(dateKey = todayDateKey(), mode = "signal"
 
 async function buildSignalDay(dateKey = todayDateKey()) {
   const [openFootball, worldcupRepo, squads, espnEvents] = await Promise.all([
-    fetchJson(OPENFOOTBALL_2026, { ttl: CACHE_MS }),
+    fetchJson(OPENFOOTBALL_2026, { ttl: CACHE_MS, timeoutMs: 2500 }).catch(() => ({ data: { matches: [] } })),
     getWorldcupRepoData(),
     getSquads(),
     fetchEspnScoreboards(dateKey)
@@ -2267,7 +2377,7 @@ async function buildSignalDay(dateKey = todayDateKey()) {
   );
 
   const preparedMatches = eventMatches.map(({ match, event }, index) => {
-    const summary = compactSummary(summaries[index]);
+    const summary = compactSummary(summaries[index]) || summaryFromGameResult(match.githubMatch);
     const homeSquad = findSquad(squads, match.team1 || summary?.home?.name);
     const awaySquad = findSquad(squads, match.team2 || summary?.away?.name);
     const homeProfile = homeSquad ? squadStats(homeSquad) : null;
@@ -2294,10 +2404,10 @@ async function buildSignalDay(dateKey = todayDateKey()) {
       source: {
         schedule: "rezarahiminia/worldcup2026",
         crossCheck: match.openFootballCrossCheck ? "OpenFootball matched" : "OpenFootball not matched",
-        live: event ? "ESPN public API" : "not mapped",
+        live: summary?.archivedResult ? "Signal Room result archive" : event ? "ESPN public API" : "not mapped",
         expertMedia: expertMedia.noteCount ? "Google News RSS + ESPN news" : "not enough media notes"
       },
-      eventId: event?.id || null,
+      eventId: event?.id || summary?.eventId || null,
       group: match.group || null,
       localDate: match.date || localDate,
       localTime: match.time || "",
@@ -2306,7 +2416,7 @@ async function buildSignalDay(dateKey = todayDateKey()) {
       home: resolvedMatch.home,
       away: resolvedMatch.away,
       summary,
-      liveScore: liveScoreFromSummary(summary),
+      liveScore: liveScoreFromSummary(summary, summary?.archivedResult ? "Signal Room result archive" : "ESPN public API"),
       predictionModel,
       expertMedia,
       squadSignals: {
@@ -2327,7 +2437,7 @@ async function buildSignalDay(dateKey = todayDateKey()) {
     fetchedAt: new Date().toISOString(),
     matches,
     teams,
-    sources: ["rezarahiminia/worldcup2026", "ESPN public API", "OpenFootball", "FIFA squad PDF", "Google News RSS", "Expert media sentiment"]
+    sources: ["rezarahiminia/worldcup2026", "Signal Room result archive", "ESPN public API", "OpenFootball", "FIFA squad PDF", "Google News RSS", "Expert media sentiment"]
   };
 }
 
@@ -2620,12 +2730,16 @@ function summarizeMatch(match, events, lineups, frames) {
 }
 
 async function probeJson(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3000);
   try {
     const response = await fetch(url, {
+      signal: controller.signal,
       headers: { "user-agent": "WorldCupMomentumDashboard/1.0" }
-    });
+    }).finally(() => clearTimeout(timeout));
     return { status: response.status, ok: response.ok };
   } catch (error) {
+    clearTimeout(timeout);
     return { status: "unreachable", ok: false, detail: error.message };
   }
 }
@@ -2634,16 +2748,20 @@ async function probeBallDontLie() {
   if (!BALLDONTLIE_API_KEY) {
     return { status: "missing_key", ok: false };
   }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3000);
   try {
     const response = await fetch(`${BALLDONTLIE_BASE}/teams?seasons[]=2026&per_page=1`, {
+      signal: controller.signal,
       headers: {
         "accept": "application/json",
         "user-agent": "WorldCupMomentumDashboard/1.0",
         ...ballDontLieHeaders()
       }
-    });
+    }).finally(() => clearTimeout(timeout));
     return { status: response.status, ok: response.ok };
   } catch (error) {
+    clearTimeout(timeout);
     return { status: "unreachable", ok: false, detail: error.message };
   }
 }
@@ -2876,7 +2994,7 @@ async function getApiFootballWorldCupOverview() {
       lockedReason: activeError || "",
       league: {
         id: worldCup.league?.id || 1,
-        name: worldCup.league?.name || "World Cup",
+        name: (worldCup.league?.name || "WORLDCUP").replace(/World Cup/g, "WORLDCUP"),
         logo: worldCup.league?.logo || ""
       },
       coverage,
@@ -2899,10 +3017,11 @@ async function handleApi(req, res, url) {
     refreshCacheForToken(url.searchParams.get("refresh"));
 
     if (url.pathname === "/api/sources") {
-      const [competitions, worldcupRepo, squads, espnProbe, bdl, apiFootball, footballData] = await Promise.all([
-        fetchJson(`${STATSBOMB_BASE}/competitions.json`, { ttl: CACHE_MS }),
+      const [competitions, worldcupRepo, squads, resultArchive, espnProbe, bdl, apiFootball, footballData] = await Promise.all([
+        fetchJson(`${STATSBOMB_BASE}/competitions.json`, { ttl: CACHE_MS, timeoutMs: 2500 }).catch(() => ({ data: [] })),
         getWorldcupRepoData(),
         getSquads(),
+        getResultArchive(),
         probeJson(`${ESPN_BASE}/scoreboard?dates=${todayDateKey()}&limit=100`),
         probeBallDontLie(),
         probeApiFootball(),
@@ -2929,6 +3048,15 @@ async function handleApi(req, res, url) {
             },
             fields: ["fixtures", "teams", "groups", "stadiums", "score/status fields"],
             freshness: "local git clone"
+          },
+          {
+            id: "signal-room-result-archive",
+            name: "Signal Room result archive",
+            access: "curated_local",
+            status: resultArchive.length ? "connected" : "locked",
+            pulled: { results: resultArchive.length },
+            fields: ["completed match scores", "final status", "result source", "QIP calibration truth"],
+            freshness: "momentum plot archive fallback"
           },
           {
             id: "fifa-squad-pdf",
@@ -2984,7 +3112,7 @@ async function handleApi(req, res, url) {
             access: "api_key",
             status: apiFootball.ok ? "connected" : apiFootball.status === "missing_key" ? "locked" : "blocked",
             pulled: {},
-            fields: ["World Cup coverage metadata", "fixtures", "standings", "teams", "lineups", "events", "player stats", "top scorers", "predictions", "odds"],
+            fields: ["WORLDCUP coverage metadata", "fixtures", "standings", "teams", "lineups", "events", "player stats", "top scorers", "predictions", "odds"],
             freshness: apiFootball.ok ? `${apiFootball.plan} plan credential` : `auth status ${apiFootball.status}`
           },
           {
@@ -3002,7 +3130,7 @@ async function handleApi(req, res, url) {
             access: "commercial_license",
             status: "licensed_only",
             pulled: {},
-            fields: ["XY events", "metadata", "live match feeds", "official World Cup data"],
+            fields: ["XY events", "metadata", "live match feeds", "official WORLDCUP data"],
             freshness: "live licensed"
           }
         ]
@@ -3061,6 +3189,7 @@ async function handleApi(req, res, url) {
         fetchedAt: new Date().toISOString(),
         source: repo.repo,
         commit: repo.commit,
+        resultArchive: repo.resultArchive,
         games: repo.games,
         teams: repo.teams,
         groups: repo.groups,
@@ -3191,7 +3320,7 @@ async function handleApi(req, res, url) {
 
       jsonResponse(res, 200, {
         fetchedAt: new Date().toISOString(),
-        source: ["FIFA squad PDF", "Signal Room scoring prior", "Google News RSS", "Expert media sentiment"],
+        source: ["FIFA squad PDF", "Signal Room scoring prior", ...(liveSummary?.archivedResult ? ["Signal Room result archive"] : []), "Google News RSS", "Expert media sentiment"],
         teams: squadTeamOptions(squads),
         match: { ...match, summary },
         squads: {
@@ -3252,7 +3381,7 @@ async function handleApi(req, res, url) {
 
       jsonResponse(res, 200, {
         fetchedAt: new Date().toISOString(),
-        source: ["rezarahiminia/worldcup2026", "ESPN public API", "FIFA squad PDF", "Google News RSS", "OpenFootball cross-check", "Expert media sentiment"],
+        source: ["rezarahiminia/worldcup2026", ...(summary?.archivedResult ? ["Signal Room result archive"] : []), "ESPN public API", "FIFA squad PDF", "Google News RSS", "OpenFootball cross-check", "Expert media sentiment"],
         match: { ...match, summary },
         squads: {
           home: homeSquad,
@@ -3442,6 +3571,6 @@ export default appHandler;
 if (fileURLToPath(import.meta.url) === resolve(process.argv[1] || "")) {
   const server = createServer(appHandler);
   server.listen(PORT, () => {
-    console.log(`World Cup dashboard running at http://localhost:${PORT}`);
+    console.log(`WORLDCUP dashboard running at http://localhost:${PORT}`);
   });
 }

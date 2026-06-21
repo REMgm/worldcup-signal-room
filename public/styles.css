@@ -1034,6 +1034,7 @@ th[data-active="asc"]::after {
 .live-score span,
 .live-score em,
 .today-prediction span,
+.today-prediction em,
 .today-prediction small {
   color: var(--muted);
   font-size: 0.72rem;
@@ -1076,6 +1077,10 @@ th[data-active="asc"]::after {
 
 .today-prediction strong {
   line-height: 1.15;
+}
+
+.today-prediction em {
+  color: var(--home);
 }
 
 .today-prediction small {

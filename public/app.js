@@ -267,6 +267,7 @@ function renderFixtures() {
     const home = game.home_team_name_en || `Team ${game.home_team_id || ""}`.trim();
     const away = game.away_team_name_en || `Team ${game.away_team_id || ""}`.trim();
     const status = game.finished === "TRUE" || game.finished === true ? "Final" : game.time_elapsed || "Scheduled";
+    const resultSource = game.result_source ? `<br><small>${escapeHtml(game.result_source)}</small>` : "";
     const score = game.home_score !== null && game.away_score !== null && game.home_score !== undefined
       ? `<span class="score">${escapeHtml(game.home_score)}-${escapeHtml(game.away_score)}</span>`
       : "";
@@ -274,7 +275,7 @@ function renderFixtures() {
       <td>${escapeHtml(gmtObjectLabel(game.gmt) || `TBD ${DISPLAY_TIME_LABEL}`)}</td>
       <td class="match-cell">${escapeHtml(home)} ${score} ${escapeHtml(away)}<br><small>${escapeHtml(game.stadium_name || "")}</small></td>
       <td>${escapeHtml(game.group || game.type || "Group")}</td>
-      <td>${escapeHtml(status)}</td>
+      <td>${escapeHtml(status)}${resultSource}</td>
     `;
     return tr;
   }));
@@ -323,10 +324,12 @@ function renderTodayMatches() {
       <div class="today-prediction">
         <span>Prediction</span>
         <strong>${escapeHtml(projectedScore?.label || "Prediction pending")}</strong>
+        <em>Experiment by QIP AI Learning Protocol</em>
         <small>${escapeHtml(match.home)} ${escapeHtml(homeProb || 0)}% · Draw ${escapeHtml(drawProb || 0)}% · ${escapeHtml(match.away)} ${escapeHtml(awayProb || 0)}%</small>
       </div>
       <div class="today-card-meta">${prediction ? `Favorite: ${escapeHtml(prediction.favorite)} · ${escapeHtml(prediction.confidence)} confidence` : "Prediction data pending"}</div>
       <div class="today-card-meta">${odds ? `${escapeHtml(odds.provider || "Odds")} market blended with squad history` : "Historical squad model only"}</div>
+      <div class="today-card-meta">Live feed: ${escapeHtml(match.source?.live || "not mapped")}</div>
       <div class="today-card-meta">${expert?.noteCount ? `Expert pulse: ${escapeHtml(expert.leanLabel || "No clear lean")} · ${escapeHtml(expert.noteCount)} notes` : "Expert pulse pending"}</div>
     `;
     card.addEventListener("click", async () => {
@@ -677,7 +680,7 @@ function renderApiFootball(data) {
       <article>
         <span>Fallback Sample</span>
         <strong>${escapeHtml(data.fallbackSeason || "n/a")}</strong>
-        <small>Historical World Cup calibration layer</small>
+        <small>Historical WORLDCUP calibration layer</small>
       </article>
     </div>
     <div class="api-football-grid">
@@ -1176,7 +1179,7 @@ function renderMatchRoom(data) {
         <div class="score-prediction">
           <span>Score Prediction</span>
           <b>${escapeHtml(score.label)}</b>
-          <small>May change as confidence grows throughout the game</small>
+          <small>Experiment by QIP AI Learning Protocol</small>
         </div>
       ` : ""}
       <span>${escapeHtml(summary.venue || match.githubMatch?.stadium_name || "")}</span>
@@ -1249,7 +1252,7 @@ function renderMatchupLab(data) {
         <div class="score-prediction">
           <span>Score Prediction</span>
           <b>${escapeHtml(score.label)}</b>
-          <small>May change as confidence grows throughout the game</small>
+          <small>Experiment by QIP AI Learning Protocol</small>
         </div>
       ` : ""}
       <span>${escapeHtml(summary.venue || "Neutral scenario")}</span>

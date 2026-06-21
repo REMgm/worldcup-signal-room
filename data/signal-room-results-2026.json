@@ -1,0 +1,72 @@
+[
+  {
+    "match_id": "1",
+    "date": "2026-06-11",
+    "home": "Mexico",
+    "away": "South Africa",
+    "home_score": 2,
+    "away_score": 0,
+    "status": "Final",
+    "source": "Signal Room momentum plot archive"
+  },
+  {
+    "match_id": "7",
+    "date": "2026-06-13",
+    "home": "Brazil",
+    "away": "Morocco",
+    "home_score": 1,
+    "away_score": 1,
+    "status": "Final",
+    "source": "Signal Room momentum plot archive"
+  },
+  {
+    "match_id": "6",
+    "date": "2026-06-13",
+    "home": "Australia",
+    "away": "Turkey",
+    "home_score": 2,
+    "away_score": 0,
+    "status": "Final",
+    "source": "Signal Room momentum plot archive"
+  },
+  {
+    "match_id": "11",
+    "date": "2026-06-14",
+    "home": "Netherlands",
+    "away": "Japan",
+    "home_score": 2,
+    "away_score": 2,
+    "status": "Final",
+    "source": "Signal Room momentum plot archive"
+  },
+  {
+    "match_id": "12",
+    "date": "2026-06-14",
+    "home": "Sweden",
+    "away": "Tunisia",
+    "home_score": 5,
+    "away_score": 1,
+    "status": "Final",
+    "source": "Signal Room momentum plot archive"
+  },
+  {
+    "match_id": "9",
+    "date": "2026-06-14",
+    "home": "Ivory Coast",
+    "away": "Ecuador",
+    "home_score": 1,
+    "away_score": 0,
+    "status": "Final",
+    "source": "Signal Room momentum plot archive"
+  },
+  {
+    "match_id": "21",
+    "date": "2026-06-17",
+    "home": "Portugal",
+    "away": "Democratic Republic of the Congo",
+    "home_score": 1,
+    "away_score": 1,
+    "status": "Final",
+    "source": "Signal Room momentum plot archive"
+  }
+]
