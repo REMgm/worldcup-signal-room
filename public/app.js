@@ -3,6 +3,7 @@ const state = {
   worldcup26: null,
   signalDay: null,
   signals: null,
+  apiFootball: null,
   knockout: null,
   knockoutMode: "signal",
   knockoutRequestId: 0,
@@ -647,6 +648,89 @@ function renderSignals(data) {
   renderPie("#resultPieChart", data?.charts?.resultPie || [], `${data?.summary?.hitRate || 0}%`);
   renderPie("#modelBlendChart", data?.charts?.modelWeights || [], "Blend");
   renderSignalTables(data);
+}
+
+function renderApiFootball(data) {
+  const node = $("#apiFootballVisuals");
+  if (!node) return;
+  if (!data) {
+    node.innerHTML = `<div class="empty">API-Sports intelligence is loading.</div>`;
+    return;
+  }
+  const endpointMax = Math.max(1, ...(data.endpoints || []).map((item) => Number(item.results || 0)));
+  const coverage = data.coverage || [];
+  const endpoints = data.endpoints || [];
+  const topScorers = data.examples?.topScorers || [];
+  const standings = data.examples?.standings || [];
+  node.innerHTML = `
+    <div class="api-football-summary">
+      <article>
+        <span>Status</span>
+        <strong>${escapeHtml(data.connected ? "Connected" : "Locked")}</strong>
+        <small>${escapeHtml(data.plan || data.status || "unknown")}${data.lockedReason ? ` · ${escapeHtml(data.lockedReason)}` : ""}</small>
+      </article>
+      <article>
+        <span>2026 Coverage</span>
+        <strong>${escapeHtml(coverage.filter((item) => item.enabled).length)}/${escapeHtml(coverage.length)}</strong>
+        <small>Available once season access is unlocked</small>
+      </article>
+      <article>
+        <span>Fallback Sample</span>
+        <strong>${escapeHtml(data.fallbackSeason || "n/a")}</strong>
+        <small>Historical World Cup calibration layer</small>
+      </article>
+    </div>
+    <div class="api-football-grid">
+      <section>
+        <h3>Coverage Map</h3>
+        <div class="coverage-pills">
+          ${coverage.map((item) => `<span class="${item.enabled ? "on" : "off"}">${escapeHtml(item.label)}</span>`).join("")}
+        </div>
+      </section>
+      <section>
+        <h3>Endpoint Pulls</h3>
+        <div class="api-endpoint-bars">
+          ${endpoints.map((item) => `
+            <div class="bar-row ${item.status === "locked" ? "muted" : ""}">
+              <span>${escapeHtml(item.label)}</span>
+              <div class="bar-track"><div class="bar-fill" style="width:${Math.max(4, (Number(item.results || 0) / endpointMax) * 100)}%"></div></div>
+              <strong>${escapeHtml(item.status === "locked" ? "locked" : item.results)}</strong>
+            </div>
+          `).join("")}
+        </div>
+      </section>
+      <section>
+        <h3>Historical Leaders</h3>
+        <div class="api-standings-mini">
+          ${standings.slice(0, 2).map((group) => `
+            <article>
+              <b>${escapeHtml(group.group || "Group")}</b>
+              ${(group.leaders || []).slice(0, 3).map((row) => `
+                <span>${escapeHtml(row.rank)}. ${escapeHtml(row.team)} <em>${escapeHtml(row.points)} pts · GD ${escapeHtml(row.goalDifference)}</em></span>
+              `).join("")}
+            </article>
+          `).join("") || `<div class="empty">No standings sample available.</div>`}
+        </div>
+      </section>
+      <section>
+        <h3>Finishing Signals</h3>
+        <div class="api-scorers">
+          ${topScorers.slice(0, 4).map((player) => `
+            <article>
+              ${player.photo ? `<img src="${escapeHtml(player.photo)}" alt="">` : ""}
+              <div>
+                <b>${escapeHtml(player.player)}</b>
+                <span>${escapeHtml(player.team)} · ${escapeHtml(player.goals)} goals${player.assists ? ` · ${escapeHtml(player.assists)} assists` : ""}</span>
+              </div>
+            </article>
+          `).join("") || `<div class="empty">No scorer sample available.</div>`}
+        </div>
+      </section>
+    </div>
+    <div class="api-leverage">
+      ${(data.predictionLeverage || []).map((item) => `<span>${escapeHtml(item)}</span>`).join("")}
+    </div>
+  `;
 }
 
 function renderSources() {
@@ -1378,6 +1462,11 @@ async function loadSignals(options = {}) {
   renderSignals(state.signals);
 }
 
+async function loadApiFootball(options = {}) {
+  state.apiFootball = await getJson("/api/api-football/worldcup", options);
+  renderApiFootball(state.apiFootball);
+}
+
 async function loadKnockout(options = {}) {
   const requestId = state.knockoutRequestId + 1;
   state.knockoutRequestId = requestId;
@@ -1479,6 +1568,7 @@ async function refreshAll(options = {}) {
       loadSquads({ ...requestOptions, selection }),
       loadSignalDay({ ...requestOptions, selection }),
       loadSignals(requestOptions),
+      loadApiFootball(requestOptions),
       loadKnockout(requestOptions)
     ]);
     await Promise.all([

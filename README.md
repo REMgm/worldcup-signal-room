@@ -11,6 +11,7 @@ Interactive FIFA World Cup 2026 intelligence dashboard with match rooms, team ro
 - StatsBomb open data for historical match-lab exploration
 - Google News RSS for team and match preview wires
 - BALLDONTLIE FIFA API is wired through `BALLDONTLIE_API_KEY`, but requires a valid credential
+- API-SPORTS API-Football is wired through `API_FOOTBALL_KEY`; 2026 season access depends on the active API-Sports plan
 
 ## Local Run
 
@@ -28,6 +29,7 @@ Optional production environment variable:
 
 ```bash
 BALLDONTLIE_API_KEY=your_key_here
+API_FOOTBALL_KEY=your_key_here
 ```
 
 Do not commit API keys or local `.env` files.

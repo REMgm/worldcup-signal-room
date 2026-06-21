@@ -14,7 +14,9 @@ const WORLDCUP26_BASE = "https://worldcup26.ir/get";
 const OPENFOOTBALL_2026 = "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json";
 const ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world";
 const BALLDONTLIE_BASE = "https://api.balldontlie.io/fifa/worldcup/v1";
+const API_FOOTBALL_BASE = "https://v3.football.api-sports.io";
 const BALLDONTLIE_API_KEY = process.env.BALLDONTLIE_API_KEY || "";
+const API_FOOTBALL_KEY = process.env.API_FOOTBALL_KEY || "";
 
 const cache = new Map();
 const inFlight = new Map();
@@ -50,6 +52,12 @@ function badRequest(res, message) {
 function ballDontLieHeaders() {
   return {
     Authorization: `Bearer ${BALLDONTLIE_API_KEY}`
+  };
+}
+
+function apiFootballHeaders() {
+  return {
+    "x-apisports-key": API_FOOTBALL_KEY
   };
 }
 
@@ -2703,17 +2711,201 @@ function summarizeBallDontLieOverview(overview) {
   };
 }
 
+function apiFootballErrorLabel(errors) {
+  if (!errors || (Array.isArray(errors) && !errors.length)) return "";
+  if (typeof errors === "string") return errors;
+  if (Array.isArray(errors)) return errors.join(", ");
+  return Object.values(errors).filter(Boolean).join(", ");
+}
+
+function apiFootballCoverageFlags(coverage = {}) {
+  const fixtures = coverage.fixtures || {};
+  return [
+    ["Fixture events", fixtures.events],
+    ["Lineups", fixtures.lineups],
+    ["Fixture stats", fixtures.statistics_fixtures],
+    ["Player stats", fixtures.statistics_players],
+    ["Standings", coverage.standings],
+    ["Players", coverage.players],
+    ["Top scorers", coverage.top_scorers],
+    ["Top assists", coverage.top_assists],
+    ["Top cards", coverage.top_cards],
+    ["Predictions", coverage.predictions],
+    ["Odds", coverage.odds],
+    ["Injuries", coverage.injuries]
+  ].map(([label, enabled]) => ({ label, enabled: Boolean(enabled) }));
+}
+
+function summarizeApiFootballFixture(fixture = {}) {
+  return {
+    id: fixture.fixture?.id || null,
+    round: fixture.league?.round || "",
+    date: fixture.fixture?.date || "",
+    venue: fixture.fixture?.venue?.name || "",
+    city: fixture.fixture?.venue?.city || "",
+    status: fixture.fixture?.status?.short || "",
+    home: fixture.teams?.home?.name || "",
+    away: fixture.teams?.away?.name || "",
+    score: `${fixture.goals?.home ?? 0}-${fixture.goals?.away ?? 0}`,
+    events: fixture.events?.length || 0,
+    lineups: fixture.lineups?.length || 0,
+    fixtureStats: fixture.statistics?.length || 0,
+    playerStatsTeams: fixture.players?.length || 0
+  };
+}
+
+function summarizeApiFootballStandings(data) {
+  const groups = data?.response?.[0]?.league?.standings || [];
+  return groups.slice(0, 4).map((groupRows) => ({
+    group: groupRows?.[0]?.group || "",
+    leaders: (groupRows || []).slice(0, 4).map((row) => ({
+      rank: row.rank,
+      team: row.team?.name || "",
+      points: row.points ?? 0,
+      played: row.all?.played ?? 0,
+      goalsFor: row.all?.goals?.for ?? 0,
+      goalsAgainst: row.all?.goals?.against ?? 0,
+      goalDifference: row.goalsDiff ?? 0,
+      form: row.form || ""
+    }))
+  }));
+}
+
+function summarizeApiFootballScorers(data) {
+  return (data?.response || []).slice(0, 6).map((row) => ({
+    player: row.player?.name || "",
+    photo: row.player?.photo || "",
+    team: row.statistics?.[0]?.team?.name || "",
+    goals: row.statistics?.[0]?.goals?.total ?? 0,
+    assists: row.statistics?.[0]?.goals?.assists ?? 0,
+    rating: row.statistics?.[0]?.games?.rating || ""
+  }));
+}
+
+async function probeApiFootball() {
+  if (!API_FOOTBALL_KEY) {
+    return { status: "missing_key", ok: false, plan: "not_configured", requests: null };
+  }
+  try {
+    const result = await fetchJsonWithHeaders(`${API_FOOTBALL_BASE}/status`, apiFootballHeaders(), { ttl: 1000 * 60 * 10 });
+    return {
+      status: result.status,
+      ok: true,
+      plan: result.data?.response?.subscription?.plan || "unknown",
+      requests: result.data?.response?.requests || null
+    };
+  } catch (error) {
+    return { status: "unreachable", ok: false, plan: "unknown", requests: null, detail: error.message };
+  }
+}
+
+async function fetchApiFootball(path, options = {}) {
+  if (!API_FOOTBALL_KEY) return null;
+  const result = await fetchJsonWithHeaders(`${API_FOOTBALL_BASE}${path}`, apiFootballHeaders(), options);
+  return result.data;
+}
+
+async function getApiFootballWorldCupOverview() {
+  return onceInFlight("api-football:worldcup", async () => {
+    const cached = cache.get("api-football:worldcup");
+    if (cached && Date.now() - cached.at < 1000 * 60 * 10) return cached.value;
+
+    const status = await probeApiFootball();
+    if (!status.ok) {
+      return {
+        provider: "API-SPORTS API-Football",
+        connected: false,
+        status: status.status,
+        plan: status.plan,
+        requests: status.requests,
+        activeSeason: 2026,
+        fallbackSeason: 2022,
+        lockedReason: status.status === "missing_key" ? "API_FOOTBALL_KEY is not configured" : "Credential probe failed",
+        coverage: [],
+        endpoints: [],
+        examples: {},
+        predictionLeverage: []
+      };
+    }
+
+    const league = await fetchApiFootball("/leagues?id=1", { ttl: 1000 * 60 * 60 });
+    const worldCup = league?.response?.[0] || {};
+    const season2026 = (worldCup.seasons || []).find((season) => Number(season.year) === 2026) || {};
+    const coverage = apiFootballCoverageFlags(season2026.coverage || {});
+    const activeFixtures = await fetchApiFootball("/fixtures?league=1&season=2026", { ttl: 1000 * 60 * 10 }).catch((error) => ({
+      errors: { request: error.message },
+      results: 0,
+      response: []
+    }));
+    await delay(120);
+    const activeError = apiFootballErrorLabel(activeFixtures?.errors);
+    const fallbackFixtures = await fetchApiFootball("/fixtures?league=1&season=2022", { ttl: 1000 * 60 * 60 }).catch(() => null);
+    await delay(120);
+    const fallbackStandings = await fetchApiFootball("/standings?league=1&season=2022", { ttl: 1000 * 60 * 60 }).catch(() => null);
+    await delay(120);
+    const fallbackScorers = await fetchApiFootball("/players/topscorers?league=1&season=2022", { ttl: 1000 * 60 * 60 }).catch(() => null);
+
+    const endpointRows = [
+      ["2026 fixtures", activeFixtures],
+      ["2026 teams", activeError ? { errors: activeFixtures?.errors, results: 0 } : { results: 0 }],
+      ["2026 standings", activeError ? { errors: activeFixtures?.errors, results: 0 } : { results: 0 }],
+      ["2022 fixtures fallback", fallbackFixtures],
+      ["2022 standings fallback", fallbackStandings],
+      ["2022 top scorers fallback", fallbackScorers]
+    ].map(([label, payload]) => ({
+      label,
+      results: Number(payload?.results || 0),
+      status: apiFootballErrorLabel(payload?.errors) ? "locked" : "available",
+      note: apiFootballErrorLabel(payload?.errors)
+    }));
+
+    const examples = {
+      fixtures: (fallbackFixtures?.response || []).slice(0, 5).map(summarizeApiFootballFixture),
+      standings: summarizeApiFootballStandings(fallbackStandings),
+      topScorers: summarizeApiFootballScorers(fallbackScorers)
+    };
+
+    const value = {
+      provider: "API-SPORTS API-Football",
+      connected: true,
+      status: status.status,
+      plan: status.plan,
+      requests: status.requests,
+      activeSeason: 2026,
+      fallbackSeason: 2022,
+      lockedReason: activeError || "",
+      league: {
+        id: worldCup.league?.id || 1,
+        name: worldCup.league?.name || "World Cup",
+        logo: worldCup.league?.logo || ""
+      },
+      coverage,
+      endpoints: endpointRows,
+      examples,
+      predictionLeverage: [
+        "Use fixture events and lineups as live priors once the credential has 2026 season access.",
+        "Blend API-Football predictions as an external model vote, then measure disagreement against Signal Room QIP.",
+        "Use player ratings, cards, top scorers, and injury fields to adjust finishing, discipline, and lineup volatility.",
+        "Use historical 2022 fixtures as a calibration benchmark for goal totals, upset rate, and knockout tempo."
+      ]
+    };
+    cache.set("api-football:worldcup", { at: Date.now(), value });
+    return value;
+  });
+}
+
 async function handleApi(req, res, url) {
   try {
     refreshCacheForToken(url.searchParams.get("refresh"));
 
     if (url.pathname === "/api/sources") {
-      const [competitions, worldcupRepo, squads, espnProbe, bdl, footballData] = await Promise.all([
+      const [competitions, worldcupRepo, squads, espnProbe, bdl, apiFootball, footballData] = await Promise.all([
         fetchJson(`${STATSBOMB_BASE}/competitions.json`, { ttl: CACHE_MS }),
         getWorldcupRepoData(),
         getSquads(),
         probeJson(`${ESPN_BASE}/scoreboard?dates=${todayDateKey()}&limit=100`),
         probeBallDontLie(),
+        probeApiFootball(),
         probeJson("https://api.football-data.org/v4/competitions/WC/matches")
       ]);
 
@@ -2787,6 +2979,15 @@ async function handleApi(req, res, url) {
             freshness: bdl.ok ? "credentialed live feed" : `auth status ${bdl.status}`
           },
           {
+            id: "api-football",
+            name: "API-SPORTS API-Football",
+            access: "api_key",
+            status: apiFootball.ok ? "connected" : apiFootball.status === "missing_key" ? "locked" : "blocked",
+            pulled: {},
+            fields: ["World Cup coverage metadata", "fixtures", "standings", "teams", "lineups", "events", "player stats", "top scorers", "predictions", "odds"],
+            freshness: apiFootball.ok ? `${apiFootball.plan} plan credential` : `auth status ${apiFootball.status}`
+          },
+          {
             id: "football-data",
             name: "football-data.org",
             access: "api_key",
@@ -2806,6 +3007,12 @@ async function handleApi(req, res, url) {
           }
         ]
       });
+      return;
+    }
+
+    if (url.pathname === "/api/api-football/worldcup") {
+      const overview = await getApiFootballWorldCupOverview();
+      jsonResponse(res, 200, overview);
       return;
     }
 
