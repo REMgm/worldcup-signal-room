@@ -276,26 +276,35 @@ function normalizeProbabilities(odds) {
 }
 
 const GMT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const DISPLAY_TIME_OFFSET_MINUTES = 120;
+const DISPLAY_TIME_LABEL = "GMT+2";
 
 function todayDateKey() {
-  return new Date().toISOString().slice(0, 10).replaceAll("-", "");
+  return applyDisplayTimeOffset(new Date()).toISOString().slice(0, 10).replaceAll("-", "");
+}
+
+function applyDisplayTimeOffset(date) {
+  return new Date(date.getTime() + DISPLAY_TIME_OFFSET_MINUTES * 60 * 1000);
 }
 
 function gmtLabel(date) {
-  const day = String(date.getUTCDate()).padStart(2, "0");
-  const hour = String(date.getUTCHours()).padStart(2, "0");
-  const minute = String(date.getUTCMinutes()).padStart(2, "0");
-  return `${day} ${GMT_MONTHS[date.getUTCMonth()]}, ${hour}:${minute} GMT`;
+  const displayTime = applyDisplayTimeOffset(date);
+  const day = String(displayTime.getUTCDate()).padStart(2, "0");
+  const hour = String(displayTime.getUTCHours()).padStart(2, "0");
+  const minute = String(displayTime.getUTCMinutes()).padStart(2, "0");
+  return `${day} ${GMT_MONTHS[displayTime.getUTCMonth()]}, ${hour}:${minute} ${DISPLAY_TIME_LABEL}`;
 }
 
 function gmtFromIso(value) {
   if (!value) return null;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
+  const displayTime = applyDisplayTimeOffset(date);
   return {
     iso: date.toISOString(),
-    time: date.toISOString().slice(11, 16),
-    label: gmtLabel(date)
+    time: displayTime.toISOString().slice(11, 16),
+    label: gmtLabel(date),
+    displayTimeZone: DISPLAY_TIME_LABEL
   };
 }
 

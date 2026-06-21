@@ -19,6 +19,8 @@ const state = {
 
 const API_BASE = window.location.protocol === "file:" ? "http://localhost:4173" : "";
 const GMT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const DISPLAY_TIME_OFFSET_MINUTES = 120;
+const DISPLAY_TIME_LABEL = "GMT+2";
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 
@@ -47,7 +49,7 @@ function withRefresh(url, refreshToken) {
 }
 
 function todayDateKey() {
-  return new Date().toISOString().slice(0, 10).replaceAll("-", "");
+  return applyDisplayTimeOffset(new Date()).toISOString().slice(0, 10).replaceAll("-", "");
 }
 
 function inputDateToKey(value) {
@@ -77,15 +79,16 @@ function setSelectedDate(key) {
 
 function refreshTimeLabel() {
   const now = new Date();
-  const gmtHour = String(now.getUTCHours()).padStart(2, "0");
-  const gmtMinute = String(now.getUTCMinutes()).padStart(2, "0");
+  const displayTime = applyDisplayTimeOffset(now);
+  const displayHour = String(displayTime.getUTCHours()).padStart(2, "0");
+  const displayMinute = String(displayTime.getUTCMinutes()).padStart(2, "0");
   const edtTime = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
     hour: "2-digit",
     minute: "2-digit",
     hour12: false
   }).format(now);
-  return `Live ${gmtHour}:${gmtMinute} GMT · ${edtTime} EDT`;
+  return `Live ${displayHour}:${displayMinute} ${DISPLAY_TIME_LABEL} · ${edtTime} EDT`;
 }
 
 function escapeHtml(value) {
@@ -113,18 +116,28 @@ function formatDate(value) {
   }).format(parsed);
 }
 
+function applyDisplayTimeOffset(date) {
+  return new Date(date.getTime() + DISPLAY_TIME_OFFSET_MINUTES * 60 * 1000);
+}
+
 function formatGMT(value) {
-  if (!value) return "TBD GMT";
+  if (!value) return `TBD ${DISPLAY_TIME_LABEL}`;
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "TBD GMT";
-  const day = String(date.getUTCDate()).padStart(2, "0");
-  const hour = String(date.getUTCHours()).padStart(2, "0");
-  const minute = String(date.getUTCMinutes()).padStart(2, "0");
-  return `${day} ${GMT_MONTHS[date.getUTCMonth()]}, ${hour}:${minute} GMT`;
+  if (Number.isNaN(date.getTime())) return `TBD ${DISPLAY_TIME_LABEL}`;
+  const displayTime = applyDisplayTimeOffset(date);
+  const day = String(displayTime.getUTCDate()).padStart(2, "0");
+  const hour = String(displayTime.getUTCHours()).padStart(2, "0");
+  const minute = String(displayTime.getUTCMinutes()).padStart(2, "0");
+  return `${day} ${GMT_MONTHS[displayTime.getUTCMonth()]}, ${hour}:${minute} ${DISPLAY_TIME_LABEL}`;
+}
+
+function gmtObjectLabel(gmt) {
+  if (gmt?.iso) return formatGMT(gmt.iso);
+  return gmt?.label || "";
 }
 
 function matchGmtLabel(match) {
-  return match?.gmt?.label || (match?.summary?.date ? formatGMT(match.summary.date) : "TBD GMT");
+  return gmtObjectLabel(match?.gmt) || (match?.summary?.date ? formatGMT(match.summary.date) : `TBD ${DISPLAY_TIME_LABEL}`);
 }
 
 function matchSignature(match) {
@@ -257,7 +270,7 @@ function renderFixtures() {
       ? `<span class="score">${escapeHtml(game.home_score)}-${escapeHtml(game.away_score)}</span>`
       : "";
     tr.innerHTML = `
-      <td>${escapeHtml(game.gmt?.label || "TBD GMT")}</td>
+      <td>${escapeHtml(gmtObjectLabel(game.gmt) || `TBD ${DISPLAY_TIME_LABEL}`)}</td>
       <td class="match-cell">${escapeHtml(home)} ${score} ${escapeHtml(away)}<br><small>${escapeHtml(game.stadium_name || "")}</small></td>
       <td>${escapeHtml(game.group || game.type || "Group")}</td>
       <td>${escapeHtml(status)}</td>
@@ -512,7 +525,7 @@ function percentLabel(value) {
 }
 
 function signalTime(row) {
-  return row?.gmt?.label || (row?.dateKey ? `${row.dateKey.slice(6, 8)} ${GMT_MONTHS[Number(row.dateKey.slice(4, 6)) - 1]}` : "TBD");
+  return gmtObjectLabel(row?.gmt) || (row?.dateKey ? `${row.dateKey.slice(6, 8)} ${GMT_MONTHS[Number(row.dateKey.slice(4, 6)) - 1]}` : "TBD");
 }
 
 function renderSignalKpis(data) {
