@@ -68,9 +68,15 @@ function setSelectedDate(key) {
 
 function refreshTimeLabel() {
   const now = new Date();
-  const hour = String(now.getUTCHours()).padStart(2, "0");
-  const minute = String(now.getUTCMinutes()).padStart(2, "0");
-  return `Live ${hour}:${minute} GMT`;
+  const gmtHour = String(now.getUTCHours()).padStart(2, "0");
+  const gmtMinute = String(now.getUTCMinutes()).padStart(2, "0");
+  const edtTime = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).format(now);
+  return `Live ${gmtHour}:${gmtMinute} GMT · ${edtTime} EDT`;
 }
 
 function escapeHtml(value) {
@@ -370,6 +376,7 @@ function renderPlayersTable() {
         <div>
           <strong>${escapeHtml(player.name || player.playerName)}</strong>
           <small>#${escapeHtml(player.number || "")} · ${escapeHtml(player.playerName || "")}</small>
+          <small class="mobile-club">${escapeHtml(player.club || "Club TBA")}</small>
         </div>
       </td>
       <td>${escapeHtml(player.team)}${player.code ? `<br><small>${escapeHtml(player.code)}</small>` : ""}</td>

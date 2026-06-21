@@ -311,9 +311,10 @@ h3 {
   padding: 0 16px;
   color: var(--text);
   background: rgba(31, 193, 107, 0.12);
-  font-size: 0.86rem;
+  font-size: clamp(0.74rem, 0.9vw, 0.86rem);
   font-weight: 800;
   text-align: center;
+  line-height: 1.15;
 }
 
 .status-chip[data-mode="error"] {
@@ -628,16 +629,23 @@ h3 {
   background: var(--red);
 }
 
-.two-column,
-.match-grid {
+.two-column {
   display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(360px, 0.75fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+  align-items: stretch;
 }
 
 .match-grid {
+  display: grid;
+  gap: 14px;
   grid-template-columns: minmax(0, 1fr) 370px;
   margin-bottom: 14px;
+}
+
+.two-column > .panel {
+  display: flex;
+  flex-direction: column;
 }
 
 .panel {
@@ -951,7 +959,13 @@ th[data-active="asc"]::after {
 }
 
 .player-table-wrap {
-  max-height: 560px;
+  flex: 1;
+  max-height: 620px;
+}
+
+.fixtures-panel .table-wrap {
+  flex: 1;
+  max-height: 620px;
 }
 
 .players-table {
@@ -975,6 +989,12 @@ th[data-active="asc"]::after {
   color: var(--muted);
   font-size: 0.74rem;
   font-weight: 800;
+}
+
+.mobile-club {
+  display: none;
+  margin-top: 3px;
+  line-height: 1.18;
 }
 
 .table-player-photo {
@@ -2388,10 +2408,33 @@ th[data-active="asc"]::after {
   .profile-grid,
   .position-map-grid,
   .player-grid,
-  .probability-rings,
-  .model-sources,
   .signal-controls {
     grid-template-columns: 1fr;
+  }
+
+  .probability-rings {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .prob-ring strong {
+    font-size: clamp(0.95rem, 6vw, 1.35rem);
+  }
+
+  .prob-ring span {
+    font-size: 0.62rem;
+    max-width: 88%;
+  }
+
+  .model-sources {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .model-sources span {
+    padding: 7px 4px;
+    font-size: 0.68rem;
+    line-height: 1.1;
   }
 
   .team-hero h2,
@@ -2406,6 +2449,39 @@ th[data-active="asc"]::after {
 
   .today-card {
     min-height: 210px;
+  }
+
+  .player-table-wrap {
+    max-height: 520px;
+  }
+
+  .players-table {
+    min-width: 100%;
+    font-size: 0.78rem;
+  }
+
+  .players-table th:nth-child(4),
+  .players-table td:nth-child(4),
+  .players-table th:nth-child(5),
+  .players-table td:nth-child(5),
+  .players-table th:nth-child(6),
+  .players-table td:nth-child(6) {
+    display: none;
+  }
+
+  .mobile-club {
+    display: block;
+  }
+
+  .player-table-name {
+    min-width: 0;
+    gap: 8px;
+  }
+
+  .table-player-photo {
+    width: 32px;
+    height: 32px;
+    flex-basis: 32px;
   }
 
   .bar-row {
