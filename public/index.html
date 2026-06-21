@@ -37,6 +37,7 @@
       <div class="nav-row">
         <nav class="tabbar" aria-label="Dashboard views">
           <button class="tab active" data-view="overview" type="button">Today</button>
+          <button class="tab" data-view="signals" type="button">Signals</button>
           <button class="tab" data-view="team-room" type="button">Team Room</button>
           <button class="tab" data-view="match-room" type="button">Match Room</button>
           <button class="tab" data-view="match-lab" type="button">Match Lab</button>
@@ -59,8 +60,6 @@
             <button class="primary-button" id="openTeamButton" type="button">Open Team Room</button>
             <button class="primary-button accent" id="openMatchButton" type="button">Open Match Room</button>
           </section>
-
-          <section class="metric-grid" id="metricGrid"></section>
 
           <section class="today-grid" id="todayMatchGrid"></section>
 
@@ -111,6 +110,94 @@
                     </tr>
                   </thead>
                   <tbody id="playerRows"></tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="signals">
+          <section class="signals-hero panel">
+            <div>
+              <p class="eyebrow">Signal Room Technical Audit</p>
+              <h2>Predictions vs Results</h2>
+              <p id="signalsMethod">Model audit loading</p>
+            </div>
+            <div class="signal-kpis" id="signalKpis"></div>
+          </section>
+
+          <section class="signals-grid">
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Accuracy Curve</h2>
+                  <p>Cumulative hit rate by matchday</p>
+                </div>
+              </div>
+              <div id="accuracyLineChart" class="signal-chart"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Result Calls</h2>
+                  <p>Correct vs missed audited predictions</p>
+                </div>
+              </div>
+              <div id="resultPieChart" class="signal-chart compact"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Model Blend</h2>
+                  <p>Average source weighting at refresh</p>
+                </div>
+              </div>
+              <div id="modelBlendChart" class="signal-chart compact"></div>
+            </div>
+          </section>
+
+          <section class="two-column signals-tables">
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Predictions vs Results</h2>
+                  <p>Completed matches to selected date</p>
+                </div>
+              </div>
+              <div class="table-wrap signals-table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Match</th>
+                      <th>Predicted</th>
+                      <th>Result</th>
+                      <th>Call</th>
+                      <th>Brier</th>
+                    </tr>
+                  </thead>
+                  <tbody id="signalAuditRows"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Upcoming Predictions</h2>
+                  <p>Known scheduled matches ahead</p>
+                </div>
+              </div>
+              <div class="table-wrap signals-table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Kickoff</th>
+                      <th>Match</th>
+                      <th>Favorite</th>
+                      <th>Score</th>
+                      <th>Confidence</th>
+                    </tr>
+                  </thead>
+                  <tbody id="signalUpcomingRows"></tbody>
                 </table>
               </div>
             </div>
@@ -352,14 +439,6 @@
         </section>
       </main>
     </div>
-
-    <template id="metricTemplate">
-      <article class="metric-card">
-        <p></p>
-        <strong></strong>
-        <span></span>
-      </article>
-    </template>
 
     <script src="app.js" type="module"></script>
   </body>

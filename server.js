@@ -214,6 +214,26 @@ function nextDateKey(dateKey) {
   return date.toISOString().slice(0, 10).replaceAll("-", "");
 }
 
+function previousDateKey(dateKey) {
+  const year = Number(dateKey.slice(0, 4));
+  const month = Number(dateKey.slice(4, 6)) - 1;
+  const day = Number(dateKey.slice(6, 8));
+  const date = new Date(Date.UTC(year, month, day - 1));
+  return date.toISOString().slice(0, 10).replaceAll("-", "");
+}
+
+function dateKeyRange(startKey, endKey) {
+  const keys = [];
+  let current = startKey;
+  let guard = 0;
+  while (current <= endKey && guard < 80) {
+    keys.push(current);
+    current = nextDateKey(current);
+    guard += 1;
+  }
+  return keys;
+}
+
 function dashedDate(dateKey) {
   return `${dateKey.slice(0, 4)}-${dateKey.slice(4, 6)}-${dateKey.slice(6, 8)}`;
 }
@@ -1230,6 +1250,303 @@ function findEventForMatch(events, match) {
   });
 }
 
+async function fetchEspnScoreboardDate(dateKey) {
+  const result = await fetchJson(`${ESPN_BASE}/scoreboard?dates=${dateKey}&limit=100`, { ttl: 1000 * 60 * 3 })
+    .catch(() => ({ data: { events: [] } }));
+  return result.data.events || [];
+}
+
+function gameDateKey(game) {
+  if (game?.gmt?.iso) return game.gmt.iso.slice(0, 10).replaceAll("-", "");
+  const dashed = dashedFromRepoLocalDate(game?.local_date);
+  return dashed ? dashed.replaceAll("-", "") : "";
+}
+
+function knownFixture(game) {
+  return Boolean(game?.home_team_name_en && game?.away_team_name_en);
+}
+
+function eventCompleted(event) {
+  const status = event?.competitions?.[0]?.status || event?.status || {};
+  const type = status.type || {};
+  return Boolean(type.completed || type.state === "post" || /final/i.test(type.description || type.detail || type.shortDetail || ""));
+}
+
+function compactScoreboardSummary(event) {
+  const competition = event?.competitions?.[0] || {};
+  const competitors = competition.competitors || [];
+  const home = competitors.find((item) => item.homeAway === "home") || competitors[0] || {};
+  const away = competitors.find((item) => item.homeAway === "away") || competitors[1] || {};
+  const status = competition.status || event?.status || {};
+  const statusType = status.type || {};
+  const teamBlock = (item) => ({
+    name: item.team?.displayName || item.team?.name || "",
+    abbreviation: item.team?.abbreviation,
+    logo: item.team?.logo || item.team?.logos?.[0]?.href,
+    color: item.team?.color,
+    score: item.score || "0",
+    stats: []
+  });
+  return {
+    eventId: event?.id,
+    name: event?.name,
+    shortName: event?.shortName,
+    date: competition.date || event?.date,
+    status: statusType.description || "Scheduled",
+    statusDetail: statusType.detail || statusType.shortDetail || status.displayClock || statusType.description || "Scheduled",
+    statusState: statusType.state || "",
+    clock: status.displayClock || "",
+    period: status.period || 0,
+    venue: competition.venue?.fullName || competition.venue?.name || "Venue TBA",
+    city: competition.venue?.address?.city || competition.venue?.address?.state || "",
+    home: teamBlock(home),
+    away: teamBlock(away),
+    broadcasts: [],
+    odds: null,
+    form: [],
+    headToHead: [],
+    standings: null,
+    leaders: [],
+    lineups: [],
+    news: [],
+    videos: []
+  };
+}
+
+function swapSummaryOdds(odds) {
+  if (!odds) return odds;
+  return {
+    ...odds,
+    homeMoneyLine: odds.awayMoneyLine,
+    awayMoneyLine: odds.homeMoneyLine,
+    probabilities: odds.probabilities ? {
+      home: odds.probabilities.away,
+      draw: odds.probabilities.draw,
+      away: odds.probabilities.home
+    } : null
+  };
+}
+
+function alignSummaryToMatch(summary, match) {
+  if (!summary?.home || !summary?.away) return summary;
+  const summaryHome = teamKey(summary.home.name);
+  const summaryAway = teamKey(summary.away.name);
+  const matchHome = teamKey(match.home);
+  const matchAway = teamKey(match.away);
+  if (summaryHome === matchHome && summaryAway === matchAway) return summary;
+  if (summaryHome === matchAway && summaryAway === matchHome) {
+    return {
+      ...summary,
+      home: summary.away,
+      away: summary.home,
+      odds: swapSummaryOdds(summary.odds)
+    };
+  }
+  return summary;
+}
+
+function predictionOutcome(prediction, match) {
+  const favorite = prediction?.favorite || "";
+  if (favorite === "Draw") return "draw";
+  if (teamKey(favorite) === teamKey(match.home)) return "home";
+  if (teamKey(favorite) === teamKey(match.away)) return "away";
+  const probabilities = prediction?.probabilities || {};
+  if (probabilities.home >= probabilities.away && probabilities.home >= probabilities.draw) return "home";
+  if (probabilities.away >= probabilities.draw) return "away";
+  return "draw";
+}
+
+function outcomeLabel(outcome, match) {
+  if (outcome === "home") return match.home;
+  if (outcome === "away") return match.away;
+  return "Draw";
+}
+
+function actualOutcome(homeScore, awayScore) {
+  if (homeScore > awayScore) return "home";
+  if (awayScore > homeScore) return "away";
+  return "draw";
+}
+
+function brierScore(probabilities, outcome) {
+  const actual = { home: 0, draw: 0, away: 0, [outcome]: 1 };
+  const home = Number(probabilities?.home || 0) / 100;
+  const draw = Number(probabilities?.draw || 0) / 100;
+  const away = Number(probabilities?.away || 0) / 100;
+  return Number(((home - actual.home) ** 2 + (draw - actual.draw) ** 2 + (away - actual.away) ** 2).toFixed(3));
+}
+
+function signalPredictionForGame(game, squads, summary = null) {
+  const match = {
+    eventId: summary?.eventId || null,
+    group: game.group,
+    localDate: game.local_date,
+    gmt: game.gmt,
+    home: game.home_team_name_en,
+    away: game.away_team_name_en
+  };
+  const alignedSummary = alignSummaryToMatch(summary, match);
+  const homeSquad = findSquad(squads, match.home);
+  const awaySquad = findSquad(squads, match.away);
+  const prediction = buildPredictionModel(match, squadStats(homeSquad), squadStats(awaySquad), alignedSummary, null);
+  return { match, prediction, summary: alignedSummary };
+}
+
+function accuracySeries(rows) {
+  const byDate = new Map();
+  for (const row of rows) {
+    const key = row.dateKey || "unknown";
+    const value = byDate.get(key) || { dateKey: key, total: 0, correct: 0, brierSum: 0 };
+    value.total += 1;
+    value.correct += row.correct ? 1 : 0;
+    value.brierSum += Number(row.brier || 0);
+    byDate.set(key, value);
+  }
+  let runningTotal = 0;
+  let runningCorrect = 0;
+  return [...byDate.values()].sort((a, b) => a.dateKey.localeCompare(b.dateKey)).map((item) => {
+    runningTotal += item.total;
+    runningCorrect += item.correct;
+    return {
+      dateKey: item.dateKey,
+      label: `${item.dateKey.slice(6, 8)} ${GMT_MONTHS[Number(item.dateKey.slice(4, 6)) - 1]}`,
+      matches: item.total,
+      dailyAccuracy: Number((item.correct / Math.max(1, item.total) * 100).toFixed(1)),
+      cumulativeAccuracy: Number((runningCorrect / Math.max(1, runningTotal) * 100).toFixed(1)),
+      averageBrier: Number((item.brierSum / Math.max(1, item.total)).toFixed(3))
+    };
+  });
+}
+
+async function buildSignals(dateKey = todayDateKey()) {
+  const [worldcupRepo, squads] = await Promise.all([getWorldcupRepoData(), getSquads()]);
+  const auditDates = dateKeyRange("20260611", dateKey);
+  const scoreboardSets = await Promise.all(auditDates.map((key) => fetchEspnScoreboardDate(key)));
+  const events = scoreboardSets.flat();
+  const knownGames = (worldcupRepo.games || []).filter(knownFixture);
+  const completedPairs = knownGames
+    .filter((game) => gameDateKey(game) <= dateKey)
+    .map((game) => ({ game, event: findEventForMatch(events, game) }))
+    .filter(({ event }) => eventCompleted(event));
+
+  const summaries = await Promise.all(completedPairs.map(({ event }) =>
+    event?.id ? fetchEspnSummary(event.id).then(compactSummary).catch(() => compactScoreboardSummary(event)) : null
+  ));
+
+  const audit = completedPairs.map(({ game, event }, index) => {
+    const summary = summaries[index] || compactScoreboardSummary(event);
+    const { match, prediction, summary: alignedSummary } = signalPredictionForGame(game, squads, summary);
+    const homeScore = Number(alignedSummary?.home?.score ?? 0);
+    const awayScore = Number(alignedSummary?.away?.score ?? 0);
+    const predictedOutcome = predictionOutcome(prediction, match);
+    const actual = actualOutcome(homeScore, awayScore);
+    const brier = brierScore(prediction.probabilities, actual);
+    return {
+      id: game.id,
+      dateKey: gameDateKey(game),
+      gmt: game.gmt,
+      group: game.group,
+      home: match.home,
+      away: match.away,
+      predictedOutcome,
+      predictedWinner: outcomeLabel(predictedOutcome, match),
+      predictedScore: prediction.scorePrediction.shortLabel,
+      result: `${homeScore}-${awayScore}`,
+      actualOutcome: actual,
+      actualWinner: outcomeLabel(actual, match),
+      correct: predictedOutcome === actual,
+      exactScore: prediction.scorePrediction.homeGoals === homeScore && prediction.scorePrediction.awayGoals === awayScore,
+      confidence: prediction.confidence,
+      probabilities: prediction.probabilities,
+      weights: prediction.components?.weights || {},
+      brier,
+      status: alignedSummary?.status || "Final"
+    };
+  }).sort((a, b) => String(a.gmt?.iso || "").localeCompare(String(b.gmt?.iso || "")));
+
+  const completedIds = new Set(completedPairs.map(({ game }) => String(game.id)));
+  const upcoming = knownGames
+    .filter((game) => !completedIds.has(String(game.id)) && gameDateKey(game) >= dateKey)
+    .map((game) => {
+      const { match, prediction } = signalPredictionForGame(game, squads, null);
+      const predictedOutcome = predictionOutcome(prediction, match);
+      return {
+        id: game.id,
+        dateKey: gameDateKey(game),
+        gmt: game.gmt,
+        group: game.group,
+        home: match.home,
+        away: match.away,
+        favorite: outcomeLabel(predictedOutcome, match),
+        predictedOutcome,
+        predictedScore: prediction.scorePrediction.shortLabel,
+        confidence: prediction.confidence,
+        probabilities: prediction.probabilities,
+        weights: prediction.components?.weights || {},
+        expectedGoals: prediction.scorePrediction.expectedGoals,
+        model: prediction.label
+      };
+    })
+    .sort((a, b) => String(a.gmt?.iso || "").localeCompare(String(b.gmt?.iso || "")));
+
+  const correct = audit.filter((row) => row.correct).length;
+  const exact = audit.filter((row) => row.exactScore).length;
+  const brierAverage = audit.reduce((sum, row) => sum + row.brier, 0) / Math.max(1, audit.length);
+  const outcomeDistribution = audit.reduce((acc, row) => {
+    acc[row.predictedOutcome] = (acc[row.predictedOutcome] || 0) + 1;
+    return acc;
+  }, { home: 0, draw: 0, away: 0 });
+  const upcomingDistribution = upcoming.reduce((acc, row) => {
+    acc[row.predictedOutcome] = (acc[row.predictedOutcome] || 0) + 1;
+    return acc;
+  }, { home: 0, draw: 0, away: 0 });
+  const weightedRows = [...audit, ...upcoming].filter((row) => row.weights);
+  const weightAverage = weightedRows.reduce((acc, row) => {
+    acc.market += Number(row.weights.market || 0);
+    acc.historicalSquad += Number(row.weights.historicalSquad || 0);
+    acc.liveTournament += Number(row.weights.liveTournament || 0);
+    acc.expertMedia += Number(row.weights.expertMedia || 0);
+    return acc;
+  }, { market: 0, historicalSquad: 0, liveTournament: 0, expertMedia: 0 });
+  for (const key of Object.keys(weightAverage)) {
+    weightAverage[key] = Number((weightAverage[key] / Math.max(1, weightedRows.length) * 100).toFixed(1));
+  }
+
+  return {
+    fetchedAt: new Date().toISOString(),
+    dateKey,
+    source: ["Signal Room prediction model", "ESPN public API finals", "rezarahiminia/worldcup2026", "FIFA squad PDF"],
+    method: "Refresh-time reconstruction. Persisted pre-match model snapshots are not available yet.",
+    summary: {
+      auditedMatches: audit.length,
+      correctCalls: correct,
+      missedCalls: Math.max(0, audit.length - correct),
+      hitRate: Number((correct / Math.max(1, audit.length) * 100).toFixed(1)),
+      exactScoreRate: Number((exact / Math.max(1, audit.length) * 100).toFixed(1)),
+      averageBrier: Number(brierAverage.toFixed(3)),
+      modelScore: Number((100 - Math.min(2, brierAverage) / 2 * 100).toFixed(1)),
+      upcomingMatches: upcoming.length
+    },
+    charts: {
+      accuracySeries: accuracySeries(audit),
+      resultPie: [
+        { label: "Correct", value: correct, color: "var(--pitch)" },
+        { label: "Missed", value: Math.max(0, audit.length - correct), color: "var(--red)" }
+      ],
+      outcomeDistribution,
+      upcomingDistribution,
+      modelWeights: [
+        { label: "Market", value: weightAverage.market, color: "var(--pink)" },
+        { label: "Historical squad", value: weightAverage.historicalSquad, color: "var(--home)" },
+        { label: "Live tournament", value: weightAverage.liveTournament, color: "var(--away)" },
+        { label: "Expert media", value: weightAverage.expertMedia, color: "var(--blue)" }
+      ]
+    },
+    audit,
+    upcoming
+  };
+}
+
 async function buildSignalDay(dateKey = todayDateKey()) {
   const [openFootball, worldcupRepo, squads, espnEvents] = await Promise.all([
     fetchJson(OPENFOOTBALL_2026, { ttl: CACHE_MS }),
@@ -1868,6 +2185,13 @@ async function handleApi(req, res, url) {
       };
       if (bdl.connected) day.sources.push("BALLDONTLIE FIFA API");
       jsonResponse(res, 200, day);
+      return;
+    }
+
+    if (url.pathname === "/api/signals") {
+      const dateKey = url.searchParams.get("date") || todayDateKey();
+      const signals = await buildSignals(dateKey);
+      jsonResponse(res, 200, signals);
       return;
     }
 

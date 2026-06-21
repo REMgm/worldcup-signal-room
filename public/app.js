@@ -2,6 +2,7 @@ const state = {
   sources: null,
   worldcup26: null,
   signalDay: null,
+  signals: null,
   teamRoom: null,
   matchRoom: null,
   squads: null,
@@ -155,6 +156,7 @@ function switchView(id) {
 function renderMetrics() {
   const grid = $("#metricGrid");
   const template = $("#metricTemplate");
+  if (!grid || !template) return;
   const games = state.worldcup26?.games || [];
   const teams = state.worldcup26?.teams || [];
   const stadiums = state.worldcup26?.stadiums || [];
@@ -455,6 +457,135 @@ function renderKnockout() {
       </section>
     `;
   }).join("");
+}
+
+function percentLabel(value) {
+  return `${Number(value || 0).toFixed(1)}%`;
+}
+
+function signalTime(row) {
+  return row?.gmt?.label || (row?.dateKey ? `${row.dateKey.slice(6, 8)} ${GMT_MONTHS[Number(row.dateKey.slice(4, 6)) - 1]}` : "TBD");
+}
+
+function renderSignalKpis(data) {
+  const node = $("#signalKpis");
+  if (!node) return;
+  const summary = data?.summary || {};
+  const kpis = [
+    ["Audited", summary.auditedMatches || 0, "completed matches"],
+    ["Hit Rate", percentLabel(summary.hitRate), `${summary.correctCalls || 0} correct calls`],
+    ["Exact Score", percentLabel(summary.exactScoreRate), "scoreline precision"],
+    ["Model Score", percentLabel(summary.modelScore), `Brier ${summary.averageBrier ?? "n/a"}`],
+    ["Upcoming", summary.upcomingMatches || 0, "known fixtures"]
+  ];
+  node.innerHTML = kpis.map(([label, value, detail]) => `
+    <article>
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      <small>${escapeHtml(detail)}</small>
+    </article>
+  `).join("");
+}
+
+function renderAccuracyLine(series = []) {
+  const node = $("#accuracyLineChart");
+  if (!node) return;
+  if (!series.length) {
+    node.innerHTML = `<div class="empty">No completed match results are available yet for the selected date.</div>`;
+    return;
+  }
+  const width = 760;
+  const height = 300;
+  const margin = { top: 24, right: 24, bottom: 42, left: 48 };
+  const innerWidth = width - margin.left - margin.right;
+  const innerHeight = height - margin.top - margin.bottom;
+  const x = (index) => margin.left + (series.length === 1 ? innerWidth / 2 : (index / (series.length - 1)) * innerWidth);
+  const y = (value) => margin.top + innerHeight - (Number(value || 0) / 100) * innerHeight;
+  const points = series.map((item, index) => `${x(index)},${y(item.cumulativeAccuracy)}`).join(" ");
+  const area = `${margin.left},${margin.top + innerHeight} ${points} ${margin.left + innerWidth},${margin.top + innerHeight}`;
+  node.innerHTML = `
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Prediction accuracy over time">
+      <line class="chart-grid" x1="${margin.left}" y1="${y(100)}" x2="${margin.left + innerWidth}" y2="${y(100)}"></line>
+      <line class="chart-grid" x1="${margin.left}" y1="${y(50)}" x2="${margin.left + innerWidth}" y2="${y(50)}"></line>
+      <line class="chart-grid" x1="${margin.left}" y1="${y(0)}" x2="${margin.left + innerWidth}" y2="${y(0)}"></line>
+      <text class="chart-label" x="8" y="${y(100) + 4}">100%</text>
+      <text class="chart-label" x="14" y="${y(50) + 4}">50%</text>
+      <text class="chart-label" x="20" y="${y(0) + 4}">0%</text>
+      <polygon class="accuracy-area" points="${area}"></polygon>
+      <polyline class="accuracy-line" points="${points}"></polyline>
+      ${series.map((item, index) => `
+        <circle class="accuracy-point" cx="${x(index)}" cy="${y(item.cumulativeAccuracy)}" r="5"></circle>
+        <text class="chart-label" x="${x(index)}" y="${height - 12}" text-anchor="middle">${escapeHtml(item.label)}</text>
+      `).join("")}
+    </svg>
+  `;
+}
+
+function pieGradient(items = []) {
+  const total = items.reduce((sum, item) => sum + Number(item.value || 0), 0);
+  if (!total) return "rgba(255,255,255,0.09) 0 360deg";
+  let start = 0;
+  return items.map((item) => {
+    const end = start + (Number(item.value || 0) / total) * 360;
+    const part = `${item.color || "var(--home)"} ${start.toFixed(2)}deg ${end.toFixed(2)}deg`;
+    start = end;
+    return part;
+  }).join(", ");
+}
+
+function renderPie(target, items = [], centerLabel = "") {
+  const node = $(target);
+  if (!node) return;
+  const total = items.reduce((sum, item) => sum + Number(item.value || 0), 0);
+  node.innerHTML = `
+    <div class="signal-pie" style="--pie:${pieGradient(items)}">
+      <strong>${escapeHtml(centerLabel || formatNumber(total))}</strong>
+      <span>${escapeHtml(total ? "signals" : "pending")}</span>
+    </div>
+    <div class="signal-legend">
+      ${items.map((item) => `
+        <span><i style="background:${escapeHtml(item.color || "var(--home)")}"></i>${escapeHtml(item.label)} <b>${escapeHtml(Number(item.value || 0))}</b></span>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderSignalTables(data) {
+  const auditRows = $("#signalAuditRows");
+  const upcomingRows = $("#signalUpcomingRows");
+  if (auditRows) {
+    const rows = data?.audit || [];
+    auditRows.innerHTML = rows.length ? rows.map((row) => `
+      <tr>
+        <td class="match-cell">${escapeHtml(row.home)} vs ${escapeHtml(row.away)}<br><small>${escapeHtml(signalTime(row))}</small></td>
+        <td>${escapeHtml(row.predictedWinner)}<br><small>${escapeHtml(row.predictedScore)} · ${escapeHtml(row.confidence)} pts</small></td>
+        <td>${escapeHtml(row.actualWinner)}<br><small>${escapeHtml(row.result)}</small></td>
+        <td><span class="call-pill ${row.correct ? "correct" : "miss"}">${escapeHtml(row.correct ? "Correct" : "Miss")}</span></td>
+        <td>${escapeHtml(row.brier)}</td>
+      </tr>
+    `).join("") : `<tr><td colspan="5" class="empty">No completed result audit is available yet.</td></tr>`;
+  }
+  if (upcomingRows) {
+    const rows = data?.upcoming || [];
+    upcomingRows.innerHTML = rows.length ? rows.map((row) => `
+      <tr>
+        <td>${escapeHtml(signalTime(row))}</td>
+        <td class="match-cell">${escapeHtml(row.home)} vs ${escapeHtml(row.away)}<br><small>${escapeHtml(row.group || "")}</small></td>
+        <td>${escapeHtml(row.favorite)}<br><small>${escapeHtml(row.probabilities.home)} / ${escapeHtml(row.probabilities.draw)} / ${escapeHtml(row.probabilities.away)}</small></td>
+        <td>${escapeHtml(row.predictedScore)}</td>
+        <td>${escapeHtml(row.confidence)} pts</td>
+      </tr>
+    `).join("") : `<tr><td colspan="5" class="empty">No known upcoming fixtures are available after the selected date.</td></tr>`;
+  }
+}
+
+function renderSignals(data) {
+  $("#signalsMethod").textContent = data?.method || "Signal model audit";
+  renderSignalKpis(data);
+  renderAccuracyLine(data?.charts?.accuracySeries || []);
+  renderPie("#resultPieChart", data?.charts?.resultPie || [], `${data?.summary?.hitRate || 0}%`);
+  renderPie("#modelBlendChart", data?.charts?.modelWeights || [], "Blend");
+  renderSignalTables(data);
 }
 
 function renderSources() {
@@ -1182,6 +1313,11 @@ async function loadSignalDay(options = {}) {
   renderSourceTicker();
 }
 
+async function loadSignals(options = {}) {
+  state.signals = await getJson(`/api/signals?date=${selectedDateKey()}`, options);
+  renderSignals(state.signals);
+}
+
 async function loadTeamRoom(options = {}) {
   const team = $("#teamRoomSelect")?.value || $("#favoriteTeamSelect").value || state.signalDay?.teams?.[0] || state.squads?.teams?.[0]?.team;
   if (!team) return;
@@ -1270,7 +1406,8 @@ async function refreshAll(options = {}) {
       loadSources(requestOptions),
       loadWorldcup26(requestOptions),
       loadSquads({ ...requestOptions, selection }),
-      loadSignalDay({ ...requestOptions, selection })
+      loadSignalDay({ ...requestOptions, selection }),
+      loadSignals(requestOptions)
     ]);
     await Promise.all([
       loadTeamRoom(requestOptions),

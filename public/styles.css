@@ -226,9 +226,10 @@ h3 {
 
 h1 {
   margin-top: 6px;
-  font-size: 4.35rem;
+  font-size: clamp(2.8rem, 4.8vw, 4.35rem);
   line-height: 0.92;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 h1 span:first-child {
@@ -260,29 +261,34 @@ h3 {
 .top-actions {
   position: relative;
   z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) 58px minmax(160px, 220px);
+  align-items: end;
   gap: 10px;
   align-self: center;
   margin-left: auto;
-  padding: 22px 24px 22px 0;
-  flex-wrap: wrap;
+  padding: 22px 28px 22px 0;
   justify-content: flex-end;
+  flex: 0 0 min(590px, 46vw);
 }
 
 .date-field {
   display: grid;
   gap: 6px;
-  min-width: 190px;
+  min-width: 0;
 }
 
 .date-field input {
-  min-height: 44px;
+  min-height: 58px;
   border-color: rgba(61, 229, 255, 0.28);
   background: rgba(11, 13, 10, 0.72);
+  font-size: 1.08rem;
+  font-weight: 900;
 }
 
 .icon-button {
-  width: 44px;
-  height: 44px;
+  width: 58px;
+  height: 58px;
   border-radius: var(--radius);
   border: 1px solid var(--line);
   background: #11140f;
@@ -296,10 +302,13 @@ h3 {
 }
 
 .status-chip {
-  min-width: 136px;
+  min-width: 0;
+  min-height: 58px;
+  display: grid;
+  place-items: center;
   border: 1px solid rgba(31, 193, 107, 0.38);
   border-radius: var(--radius);
-  padding: 11px 12px;
+  padding: 0 16px;
   color: var(--text);
   background: rgba(31, 193, 107, 0.12);
   font-size: 0.86rem;
@@ -446,6 +455,177 @@ h3 {
   display: block;
   text-transform: none;
   font-weight: 700;
+}
+
+.signals-hero {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(0, 1.4fr);
+  gap: 18px;
+  align-items: center;
+  padding: 18px;
+  margin-bottom: 14px;
+  background:
+    linear-gradient(120deg, rgba(61, 229, 255, 0.16), transparent 35%),
+    linear-gradient(290deg, rgba(241, 184, 50, 0.16), transparent 38%),
+    linear-gradient(180deg, rgba(32, 35, 29, 0.98), rgba(18, 20, 16, 0.98));
+}
+
+.signals-hero h2 {
+  margin-top: 4px;
+  font-size: 2.2rem;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.signals-hero p:not(.eyebrow) {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.signal-kpis {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.signal-kpis article {
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  padding: 12px;
+  background: rgba(11, 13, 10, 0.58);
+}
+
+.signal-kpis span,
+.signal-kpis small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.signal-kpis strong {
+  display: block;
+  margin: 7px 0 4px;
+  color: var(--text);
+  font-size: 1.55rem;
+  line-height: 1;
+}
+
+.signals-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) repeat(2, minmax(240px, 0.75fr));
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.signal-chart {
+  min-height: 330px;
+  padding: 14px;
+  background:
+    linear-gradient(90deg, rgba(31, 193, 107, 0.06) 0 1px, transparent 1px 14.28%),
+    linear-gradient(0deg, rgba(255, 255, 255, 0.04) 0 1px, transparent 1px 25%),
+    #10120e;
+}
+
+.signal-chart.compact {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 16px;
+}
+
+.signal-chart svg {
+  display: block;
+  width: 100%;
+  height: 300px;
+}
+
+.accuracy-line {
+  fill: none;
+  stroke: var(--away);
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.accuracy-area {
+  fill: rgba(241, 184, 50, 0.13);
+}
+
+.accuracy-point {
+  fill: var(--bg-deep);
+  stroke: var(--home);
+  stroke-width: 3;
+}
+
+.signal-pie {
+  width: 168px;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 4px;
+  background:
+    radial-gradient(circle at center, #10120e 0 53%, transparent 54%),
+    conic-gradient(var(--pie));
+}
+
+.signal-pie strong {
+  font-size: 1.5rem;
+  line-height: 1;
+}
+
+.signal-pie span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.signal-legend {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+.signal-legend span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--soft);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.signal-legend i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: 0 0 10px;
+}
+
+.signals-table-wrap {
+  max-height: 620px;
+}
+
+.call-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 0 9px;
+  color: #07100b;
+  background: var(--pitch);
+  font-size: 0.72rem;
+  font-weight: 1000;
+}
+
+.call-pill.miss {
+  color: var(--text);
+  background: var(--red);
 }
 
 .two-column,
@@ -2114,15 +2294,18 @@ th[data-active="asc"]::after {
   }
 
   .top-actions {
+    grid-template-columns: minmax(0, 1fr) 58px minmax(160px, 220px);
     align-items: stretch;
     justify-content: flex-start;
     padding: 0 18px 18px;
     margin-left: 0;
+    width: 100%;
+    flex: auto;
   }
 
-  .metric-grid,
   .source-grid,
-  .today-grid {
+  .today-grid,
+  .signal-kpis {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -2130,6 +2313,8 @@ th[data-active="asc"]::after {
   .match-grid,
   .room-grid,
   .deep-grid,
+  .signals-grid,
+  .signals-hero,
   .team-hero,
   .match-hero {
     grid-template-columns: 1fr;
@@ -2184,14 +2369,22 @@ th[data-active="asc"]::after {
     min-width: 100%;
   }
 
+  .top-actions {
+    grid-template-columns: minmax(0, 1fr) 58px;
+  }
+
+  .status-chip {
+    grid-column: 1 / -1;
+  }
+
   .input-wrap {
     width: 100%;
   }
 
-  .metric-grid,
   .source-grid,
   .stat-list,
   .today-grid,
+  .signal-kpis,
   .profile-grid,
   .position-map-grid,
   .player-grid,
