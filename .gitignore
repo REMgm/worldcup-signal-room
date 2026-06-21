@@ -7,6 +7,9 @@ node_modules
 npm-debug.log*
 
 dashboard_*.png
+github_*.json
+github_*.png
+vercel_deploy*.png
 build_*.py
 repo_summary.md
 worldcup2026_signal_room.html

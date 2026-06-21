@@ -19,6 +19,7 @@ const BALLDONTLIE_API_KEY = process.env.BALLDONTLIE_API_KEY || "";
 const cache = new Map();
 const inFlight = new Map();
 const CACHE_MS = 1000 * 60 * 10;
+let lastRefreshToken = "";
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -50,6 +51,17 @@ function ballDontLieHeaders() {
   return {
     Authorization: `Bearer ${BALLDONTLIE_API_KEY}`
   };
+}
+
+function refreshCacheForToken(token) {
+  if (!token || token === lastRefreshToken) return;
+  cache.clear();
+  lastRefreshToken = token;
+}
+
+function normalizeDateKey(value) {
+  const key = String(value || todayDateKey()).replaceAll("-", "");
+  return /^\d{8}$/.test(key) ? key : todayDateKey();
 }
 
 function delay(ms) {
@@ -1795,7 +1807,11 @@ function parseScore(value) {
 function projectGroupStandings(games, audit, squads, qipState, mode, dateKey) {
   const table = new Map();
   const actualById = new Map(audit.map((row) => [String(row.id), row]));
-  for (const game of games.filter((item) => item.type === "group" && knownFixture(item))) {
+  const groupGames = games.filter((item) => item.type === "group" && knownFixture(item));
+  const groupTotals = new Map();
+  const groupActuals = new Map();
+  for (const game of groupGames) {
+    groupTotals.set(game.group, (groupTotals.get(game.group) || 0) + 1);
     if (!table.has(game.group)) table.set(game.group, new Map());
     const groupTable = table.get(game.group);
     for (const team of [game.home_team_name_en, game.away_team_name_en]) {
@@ -1804,10 +1820,11 @@ function projectGroupStandings(games, audit, squads, qipState, mode, dateKey) {
     const actual = actualById.get(String(game.id));
     if (actual) {
       const [homeScore, awayScore] = parseScore(actual.result);
-      addStandingResult(table, game.group, game.home_team_name_en, game.away_team_name_en, homeScore, awayScore, "actual result");
+      groupActuals.set(game.group, (groupActuals.get(game.group) || 0) + 1);
+      addStandingResult(table, game.group, game.home_team_name_en, game.away_team_name_en, homeScore, awayScore, "completed result");
       continue;
     }
-    if (mode !== "signal" || gameDateKey(game) < dateKey) continue;
+    if (mode !== "signal") continue;
     const { prediction } = signalPredictionForGame(game, squads, null, qipState);
     addStandingResult(
       table,
@@ -1820,29 +1837,50 @@ function projectGroupStandings(games, audit, squads, qipState, mode, dateKey) {
     );
   }
   const groups = Object.fromEntries([...table.entries()].map(([group, groupMap]) => [group, sortedGroupRows(groupMap)]));
+  const groupStatus = Object.fromEntries([...groupTotals.entries()].map(([group, total]) => {
+    const completed = groupActuals.get(group) || 0;
+    return {
+      total,
+      completed,
+      complete: completed >= total,
+      projected: mode === "signal"
+    };
+  }));
   const thirdRankings = Object.values(groups)
     .map((rows) => rows[2])
     .filter(Boolean)
     .sort((a, b) => b.points - a.points || b.gd - a.gd || b.gf - a.gf || a.team.localeCompare(b.team));
-  return { groups, thirdRankings };
+  return { groups, thirdRankings, groupStatus, mode, dateKey };
 }
 
 function resolveSlotLabel(label, standings) {
   const value = String(label || "");
   let match = value.match(/^Winner Group ([A-L])$/i);
   if (match) {
-    const team = standings.groups[match[1].toUpperCase()]?.[0];
+    const group = match[1].toUpperCase();
+    const status = standings.groupStatus?.[group];
+    if (standings.mode === "known" && !status?.complete) {
+      return { team: value, source: "not clinched yet" };
+    }
+    const team = standings.groups[group]?.[0];
     return team ? { team: team.team, source: `${value}, ${team.source}` } : { team: value, source: "unresolved group winner" };
   }
   match = value.match(/^Runner-up Group ([A-L])$/i);
   if (match) {
-    const team = standings.groups[match[1].toUpperCase()]?.[1];
+    const group = match[1].toUpperCase();
+    const status = standings.groupStatus?.[group];
+    if (standings.mode === "known" && !status?.complete) {
+      return { team: value, source: "not clinched yet" };
+    }
+    const team = standings.groups[group]?.[1];
     return team ? { team: team.team, source: `${value}, ${team.source}` } : { team: value, source: "unresolved group runner-up" };
   }
   match = value.match(/^3rd Group ([A-L/]+)$/i);
   if (match) {
     const allowed = new Set(match[1].split("/").map((part) => part.toUpperCase()));
-    const team = standings.thirdRankings.find((row) => allowed.has(row.group));
+    const team = standings.thirdRankings.find((row) =>
+      allowed.has(row.group) && (standings.mode !== "known" || standings.groupStatus?.[row.group]?.complete)
+    );
     return team ? { team: team.team, source: `${value}, ${team.source}` } : { team: value, source: "unresolved third-place slot" };
   }
   return { team: value || "TBD", source: "fixture label" };
@@ -2389,11 +2427,26 @@ async function getBallDontLieOverview() {
   });
 }
 
+function providerRecordCount(value) {
+  if (Array.isArray(value)) return value.length;
+  if (Array.isArray(value?.data)) return value.data.length;
+  return 0;
+}
+
+function summarizeBallDontLieOverview(overview) {
+  const available = Object.fromEntries(
+    Object.entries(overview?.data || {}).map(([key, value]) => [key, providerRecordCount(value)])
+  );
+  return {
+    status: overview?.status || "unknown",
+    connected: Boolean(overview?.connected),
+    available
+  };
+}
+
 async function handleApi(req, res, url) {
   try {
-    if (url.searchParams.has("refresh")) {
-      cache.clear();
-    }
+    refreshCacheForToken(url.searchParams.get("refresh"));
 
     if (url.pathname === "/api/sources") {
       const [competitions, worldcupRepo, squads, espnProbe, bdl, footballData] = await Promise.all([
@@ -2501,9 +2554,9 @@ async function handleApi(req, res, url) {
       const status = await probeBallDontLie();
       jsonResponse(res, 200, {
         provider: "BALLDONTLIE FIFA API",
-        hasKey: Boolean(BALLDONTLIE_API_KEY),
         connected: status.ok,
         status: status.status,
+        credentialGate: status.ok ? "connected" : status.status === "missing_key" ? "not_configured" : "blocked",
         fieldsWhenConnected: [
           "teams",
           "stadiums",
@@ -2529,9 +2582,9 @@ async function handleApi(req, res, url) {
 
     if (url.pathname === "/api/ball-dont-lie/overview") {
       const overview = await getBallDontLieOverview();
-      jsonResponse(res, overview.connected ? 200 : 401, {
+      jsonResponse(res, 200, {
         provider: "BALLDONTLIE FIFA API",
-        ...overview
+        ...summarizeBallDontLieOverview(overview)
       });
       return;
     }
@@ -2557,30 +2610,24 @@ async function handleApi(req, res, url) {
     }
 
     if (url.pathname === "/api/signal-day") {
-      const dateKey = url.searchParams.get("date") || todayDateKey();
+      const dateKey = normalizeDateKey(url.searchParams.get("date"));
       const day = await buildSignalDay(dateKey);
       const bdl = await getBallDontLieOverview();
-      day.ballDontLie = {
-        connected: bdl.connected,
-        status: bdl.status,
-        available: bdl.connected ? Object.fromEntries(
-          Object.entries(bdl.data || {}).map(([key, value]) => [key, Array.isArray(value?.data) ? value.data.length : Array.isArray(value) ? value.length : 0])
-        ) : {}
-      };
+      day.ballDontLie = summarizeBallDontLieOverview(bdl);
       if (bdl.connected) day.sources.push("BALLDONTLIE FIFA API");
       jsonResponse(res, 200, day);
       return;
     }
 
     if (url.pathname === "/api/signals") {
-      const dateKey = url.searchParams.get("date") || todayDateKey();
+      const dateKey = normalizeDateKey(url.searchParams.get("date"));
       const signals = await buildSignals(dateKey);
       jsonResponse(res, 200, signals);
       return;
     }
 
     if (url.pathname === "/api/knockout") {
-      const dateKey = url.searchParams.get("date") || todayDateKey();
+      const dateKey = normalizeDateKey(url.searchParams.get("date"));
       const mode = url.searchParams.get("mode") === "known" ? "known" : "signal";
       const knockout = await buildKnockoutProjection(dateKey, mode);
       jsonResponse(res, 200, knockout);
@@ -2588,7 +2635,7 @@ async function handleApi(req, res, url) {
     }
 
     if (url.pathname === "/api/team-room") {
-      const dateKey = url.searchParams.get("date") || todayDateKey();
+      const dateKey = normalizeDateKey(url.searchParams.get("date"));
       const teamName = url.searchParams.get("team");
       if (!teamName) {
         badRequest(res, "team is required");
@@ -2630,7 +2677,7 @@ async function handleApi(req, res, url) {
 
     if (url.pathname === "/api/matchup-lab") {
       const squads = await getSquads();
-      const dateKey = url.searchParams.get("date") || todayDateKey();
+      const dateKey = normalizeDateKey(url.searchParams.get("date"));
       const requestedHome = url.searchParams.get("home") || "Netherlands";
       const requestedAway = url.searchParams.get("away") || "Sweden";
       const homeSquad = findSquad(squads, requestedHome) || squads.teams[0];
@@ -2716,7 +2763,7 @@ async function handleApi(req, res, url) {
     }
 
     if (url.pathname === "/api/match-room") {
-      const dateKey = url.searchParams.get("date") || todayDateKey();
+      const dateKey = normalizeDateKey(url.searchParams.get("date"));
       const eventId = url.searchParams.get("eventId");
       const [day, squads] = await Promise.all([buildSignalDay(dateKey), getSquads()]);
       const match = day.matches.find((item) => item.eventId === eventId) || day.matches[0] || null;
