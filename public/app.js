@@ -309,6 +309,7 @@ function renderTodayMatches() {
       <div class="today-prediction">
         <span>Prediction</span>
         <strong>${escapeHtml(projectedScore?.label || "Prediction pending")}</strong>
+        ${scoreAlternativesMarkup(projectedScore)}
         <small>${escapeHtml(match.home)} ${escapeHtml(homeProb || 0)}% · Draw ${escapeHtml(drawProb || 0)}% · ${escapeHtml(match.away)} ${escapeHtml(awayProb || 0)}%</small>
       </div>
       <div class="today-card-meta">${prediction ? `Favorite: ${escapeHtml(prediction.favorite)} · ${escapeHtml(prediction.confidence)} confidence` : "Prediction data pending"}</div>
@@ -322,6 +323,18 @@ function renderTodayMatches() {
     });
     return card;
   }));
+}
+
+function scoreAlternativesMarkup(score) {
+  const candidates = (score?.candidates || []).slice(1, 4);
+  if (!candidates.length) return "";
+  return `
+    <div class="score-candidates" aria-label="Alternative scorelines">
+      ${candidates.map((candidate) => `
+        <span>${escapeHtml(candidate.score)}</span>
+      `).join("")}
+    </div>
+  `;
 }
 
 function renderImages(images = []) {
@@ -1079,6 +1092,7 @@ function renderMatchRoom(data) {
         <div class="score-prediction">
           <span>Score Prediction</span>
           <b>${escapeHtml(score.label)}</b>
+          ${scoreAlternativesMarkup(score)}
           <small>May change as confidence grows throughout the game</small>
         </div>
       ` : ""}
@@ -1152,6 +1166,7 @@ function renderMatchupLab(data) {
         <div class="score-prediction">
           <span>Score Prediction</span>
           <b>${escapeHtml(score.label)}</b>
+          ${scoreAlternativesMarkup(score)}
           <small>May change as confidence grows throughout the game</small>
         </div>
       ` : ""}

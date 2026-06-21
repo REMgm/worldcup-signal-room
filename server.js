@@ -486,26 +486,154 @@ function adjustQipProbabilities(probabilities, match, qipState) {
   };
 }
 
-function scorePrediction(match, probabilities, summary, confidence) {
-  const totalGoals = clamp(Number(summary?.odds?.overUnder || 2.5), 1.5, 4.5);
+function scoreOutcome(homeGoals, awayGoals) {
+  if (homeGoals > awayGoals) return "home";
+  if (awayGoals > homeGoals) return "away";
+  return "draw";
+}
+
+function poissonProbability(lambda, goals) {
+  const safeLambda = clamp(Number(lambda || 0), 0.05, 6);
+  let probability = Math.exp(-safeLambda);
+  for (let index = 1; index <= goals; index += 1) {
+    probability *= safeLambda / index;
+  }
+  return probability;
+}
+
+function outcomeProbability(probabilities, outcome) {
+  return Number(probabilities?.[outcome] || 0) / 100;
+}
+
+function favoriteOutcome(probabilities) {
+  const home = Number(probabilities?.home || 0);
+  const draw = Number(probabilities?.draw || 0);
+  const away = Number(probabilities?.away || 0);
+  if (home >= away && home >= draw) return "home";
+  if (away >= draw) return "away";
+  return "draw";
+}
+
+function scorelineGenericPenalty(homeGoals, awayGoals, calibration) {
+  if (!isGenericScoreline(homeGoals, awayGoals)) return 1;
+  return Number(calibration?.genericScorePenalty || 0.88);
+}
+
+function isGenericScoreline(homeGoals, awayGoals) {
+  return (homeGoals === 2 && awayGoals === 1) || (homeGoals === 1 && awayGoals === 2);
+}
+
+function promoteCandidate(candidates, candidate, minimumProbability = 0, calibrationReason = "QIP calibration") {
+  if (!candidate) return candidates;
+  const [top] = candidates;
+  if (!top || candidate === top) return candidates;
+  const promoted = {
+    ...candidate,
+    probability: Math.max(candidate.probability, minimumProbability),
+    calibrationReason
+  };
+  return [
+    promoted,
+    top,
+    ...candidates.filter((item) => item !== top && item !== candidate)
+  ];
+}
+
+function calibrateScoreRanking(candidates, calibration = {}, probabilities = {}, confidence = 0) {
+  let ranked = candidates;
+  const [top] = ranked;
+  if (top && isGenericScoreline(top.homeGoals, top.awayGoals)) {
+    const threshold = Number(calibration.genericSwitchThreshold || 0.76);
+    const alternative = ranked.find((candidate) =>
+      !isGenericScoreline(candidate.homeGoals, candidate.awayGoals)
+      && candidate.probability >= top.probability * threshold
+    );
+    ranked = promoteCandidate(
+      ranked,
+      alternative,
+      top.probability * 1.001,
+      "QIP suppressed overused 2-1/1-2 scoreline"
+    );
+  }
+
+  return ranked;
+}
+
+function rankedScoreCandidates(homeXg, awayXg, probabilities, calibration = {}, confidence = 0) {
+  const candidates = [];
+  const projectedTotal = homeXg + awayXg;
+  const favored = favoriteOutcome(probabilities);
+  const drawGap = Number(calibration.drawActualRate || 0) - Number(calibration.drawPredictedRate || 0);
+  for (let homeGoals = 0; homeGoals <= 5; homeGoals += 1) {
+    for (let awayGoals = 0; awayGoals <= 5; awayGoals += 1) {
+      const outcome = scoreOutcome(homeGoals, awayGoals);
+      const total = homeGoals + awayGoals;
+      const raw = poissonProbability(homeXg, homeGoals) * poissonProbability(awayXg, awayGoals);
+      const outcomeWeight = clamp(0.45 + outcomeProbability(probabilities, outcome) * 2.35, 0.45, 2.25);
+      const totalFit = clamp(1.2 - Math.abs(total - projectedTotal) * 0.13, 0.58, 1.2);
+      const favoriteFit = confidence >= 24 && outcome !== favored ? 0.78 : 1;
+      const genericPenalty = scorelineGenericPenalty(homeGoals, awayGoals, calibration);
+      const drawFit = outcome === "draw" && outcomeProbability(probabilities, "draw") < 0.2 ? 0.76 : 1;
+      const drawCorrectionFit = outcome === "draw" ? 1 + clamp(drawGap * 1.05, 0, 0.24) : 1;
+      const lowGoalFit = total <= 1 && Number(calibration.lowGoalRate || 0) < 0.2 ? 0.82 : 1;
+      const highGoalFit = total >= 4 && Number(calibration.highGoalRate || 0) > 0.24 ? 1.08 : 1;
+      candidates.push({
+        homeGoals,
+        awayGoals,
+        outcome,
+        probability: raw * outcomeWeight * totalFit * favoriteFit * genericPenalty * drawFit * drawCorrectionFit * lowGoalFit * highGoalFit
+      });
+    }
+  }
+  const sorted = candidates
+    .sort((left, right) => right.probability - left.probability)
+    .slice(0, 8);
+  return calibrateScoreRanking(sorted, calibration, probabilities, confidence)
+    .slice(0, 6)
+    .map((candidate) => ({
+      ...candidate,
+      score: `${candidate.homeGoals}-${candidate.awayGoals}`,
+      probability: Number(candidate.probability.toFixed(5))
+    }));
+}
+
+function scorePrediction(match, probabilities, summary, confidence, context = {}) {
+  const calibration = context.qipState?.scoreCalibration || {};
+  const homeProfile = context.homeProfile || {};
+  const awayProfile = context.awayProfile || {};
+  const marketTotal = Number(summary?.odds?.overUnder);
+  const calibratedBase = Number(calibration.averageActualTotal || 2.5);
+  const baseTotal = Number.isFinite(marketTotal) && marketTotal > 0 ? marketTotal : calibratedBase;
   const homeWin = Number(probabilities.home || 0);
   const awayWin = Number(probabilities.away || 0);
   const draw = Number(probabilities.draw || 0);
   const edge = clamp((homeWin - awayWin) / 100, -0.58, 0.58);
   const confidenceBoost = clamp(Number(confidence || 0) / 100, 0, 0.5);
-  let homeXg = totalGoals * clamp(0.5 + edge * 0.55 + confidenceBoost * Math.sign(edge) * 0.05, 0.22, 0.78);
-  let awayXg = Math.max(0.15, totalGoals - homeXg);
-  let homeGoals = clamp(Math.round(homeXg), 0, 5);
-  let awayGoals = clamp(Math.round(awayXg), 0, 5);
-  const winner = homeWin >= awayWin && homeWin >= draw ? "home" : awayWin >= draw ? "away" : "draw";
-
-  if (winner === "home" && homeGoals <= awayGoals) homeGoals = Math.min(5, awayGoals + 1);
-  if (winner === "away" && awayGoals <= homeGoals) awayGoals = Math.min(5, homeGoals + 1);
-  if (winner === "draw") {
-    const drawGoals = totalGoals < 2.1 ? 0 : 1;
-    homeGoals = drawGoals;
-    awayGoals = drawGoals;
-  }
+  const homeGoalDepth = Number(homeProfile.totalGoals || 0) / Math.max(1, Number(homeProfile.players || 26));
+  const awayGoalDepth = Number(awayProfile.totalGoals || 0) / Math.max(1, Number(awayProfile.players || 26));
+  const scorerDepth = clamp((homeGoalDepth + awayGoalDepth - 6) / 18, -0.22, 0.38);
+  const drawDrag = clamp((draw - 26) / 100, -0.14, 0.18) * -0.9;
+  const confidenceLift = clamp((confidence - 18) / 100, -0.12, 0.28);
+  const totalGoals = clamp(
+    baseTotal * Number(calibration.totalGoalMultiplier || 1) + scorerDepth + drawDrag + confidenceLift,
+    1.05,
+    5.35
+  );
+  const historicalEdge = clamp((Number(context.homeHistorical || 50) - Number(context.awayHistorical || 50)) / 260, -0.11, 0.11);
+  const liveEdge = clamp((Number(context.homeLive || 50) - Number(context.awayLive || 50)) / 320, -0.07, 0.07);
+  const shareShift = Number(calibration.homeShareShift || 0);
+  const homeShare = clamp(0.5 + edge * 0.42 + historicalEdge + liveEdge + confidenceBoost * Math.sign(edge) * 0.04 + shareShift, 0.18, 0.82);
+  const homeXg = totalGoals * homeShare;
+  const awayXg = Math.max(0.08, totalGoals - homeXg);
+  const candidates = rankedScoreCandidates(homeXg, awayXg, probabilities, calibration, confidence);
+  const selected = candidates[0] || {
+    homeGoals: clamp(Math.round(homeXg), 0, 5),
+    awayGoals: clamp(Math.round(awayXg), 0, 5),
+    score: `${clamp(Math.round(homeXg), 0, 5)}-${clamp(Math.round(awayXg), 0, 5)}`,
+    probability: 0
+  };
+  const homeGoals = selected.homeGoals;
+  const awayGoals = selected.awayGoals;
 
   return {
     label: `${match.home} ${homeGoals}-${awayGoals} ${match.away}`,
@@ -517,7 +645,21 @@ function scorePrediction(match, probabilities, summary, confidence) {
       away: Number(awayXg.toFixed(2)),
       total: Number((homeXg + awayXg).toFixed(2))
     },
-    basis: "Blended win probability, total-goals market, live tournament signal",
+    candidates: candidates.map((candidate) => ({
+      score: candidate.score,
+      homeGoals: candidate.homeGoals,
+      awayGoals: candidate.awayGoals,
+      outcome: candidate.outcome,
+      signal: candidate.probability,
+      calibrationReason: candidate.calibrationReason || null
+    })),
+    calibration: {
+      totalGoalMultiplier: Number(calibration.totalGoalMultiplier || 1),
+      genericScorePenalty: Number(calibration.genericScorePenalty || 1),
+      homeShareShift: Number(calibration.homeShareShift || 0),
+      averageActualTotal: Number(calibration.averageActualTotal || 0)
+    },
+    basis: "QIP-calibrated scoreline distribution, blended win probability, scoring depth, and tournament goal tempo",
     volatility: confidence >= 28 ? "medium" : "high"
   };
 }
@@ -554,7 +696,15 @@ function buildPredictionModel(match, homeProfile, awayProfile, summary, expertSi
         : "Draw";
   const rawConfidence = clamp(Math.max(probabilities.home, probabilities.draw, probabilities.away) - 33.3, 0, 66.7);
   const confidence = clamp(rawConfidence * Number(qipState?.confidenceMultiplier || 1), 0, 66.7);
-  const score = scorePrediction(match, probabilities, summary, confidence);
+  const score = scorePrediction(match, probabilities, summary, confidence, {
+    homeProfile,
+    awayProfile,
+    homeHistorical,
+    awayHistorical,
+    homeLive,
+    awayLive,
+    qipState
+  });
   const edges = [];
   const capsGap = Number(Math.abs((homeProfile?.averageCaps || 0) - (awayProfile?.averageCaps || 0)).toFixed(1));
   if (capsGap >= 5) {
@@ -619,6 +769,7 @@ function buildPredictionModel(match, homeProfile, awayProfile, summary, expertSi
       lessonCount: qipState.lessonCount,
       confidenceMultiplier: qipState.confidenceMultiplier,
       drawLift: qipState.drawLift,
+      scoreCalibration: qipState.scoreCalibration,
       rationale: qipState.rationale,
       teamAdjustment: {
         home: qipState.teamAdjustments?.[teamKey(match.home)] || null,
@@ -1544,6 +1695,77 @@ async function buildQipAuditRows(dateKey = todayDateKey(), worldcupRepo = null, 
   return { audit, completedPairs, knownGames, worldcupRepo: repoData, squads: squadData };
 }
 
+function buildScoreCalibration(audit = []) {
+  const rows = audit.filter((row) => row.result && row.predictedScore);
+  if (!rows.length) {
+    return {
+      averageActualTotal: 2.5,
+      averagePredictedTotal: 2.5,
+      totalGoalMultiplier: 1,
+      homeShareShift: 0,
+      genericScorePenalty: 0.88,
+      lowGoalRate: 0,
+      highGoalRate: 0,
+      drawActualRate: 0,
+      drawPredictedRate: 0
+    };
+  }
+  const totals = rows.reduce((acc, row) => {
+    const [actualHome, actualAway] = parseScore(row.result);
+    const [predictedHome, predictedAway] = parseScore(row.predictedScore);
+    const actualTotal = actualHome + actualAway;
+    const predictedTotal = predictedHome + predictedAway;
+    acc.actualTotal += actualTotal;
+    acc.predictedTotal += predictedTotal;
+    acc.actualHome += actualHome;
+    acc.actualAway += actualAway;
+    acc.predictedHome += predictedHome;
+    acc.predictedAway += predictedAway;
+    acc.lowGoal += actualTotal <= 1 ? 1 : 0;
+    acc.highGoal += actualTotal >= 4 ? 1 : 0;
+    acc.actualDraw += actualHome === actualAway ? 1 : 0;
+    acc.predictedDraw += predictedHome === predictedAway ? 1 : 0;
+    acc.genericPredicted += (row.predictedScore === "2-1" || row.predictedScore === "1-2") ? 1 : 0;
+    acc.genericExact += (row.predictedScore === "2-1" || row.predictedScore === "1-2") && row.exactScore ? 1 : 0;
+    return acc;
+  }, {
+    actualTotal: 0,
+    predictedTotal: 0,
+    actualHome: 0,
+    actualAway: 0,
+    predictedHome: 0,
+    predictedAway: 0,
+    lowGoal: 0,
+    highGoal: 0,
+    actualDraw: 0,
+    predictedDraw: 0,
+    genericPredicted: 0,
+    genericExact: 0
+  });
+  const count = rows.length;
+  const averageActualTotal = totals.actualTotal / count;
+  const averagePredictedTotal = totals.predictedTotal / count;
+  const actualHomeShare = totals.actualHome / Math.max(1, totals.actualTotal);
+  const predictedHomeShare = totals.predictedHome / Math.max(1, totals.predictedTotal);
+  const genericShare = totals.genericPredicted / count;
+  const genericExactRate = totals.genericExact / Math.max(1, totals.genericPredicted);
+  const genericScorePenalty = clamp(0.78 - (1 - genericExactRate) * 0.16 - genericShare * 0.28, 0.52, 0.82);
+  return {
+    averageActualTotal: Number(averageActualTotal.toFixed(2)),
+    averagePredictedTotal: Number(averagePredictedTotal.toFixed(2)),
+    totalGoalMultiplier: Number(clamp(averageActualTotal / Math.max(1.15, averagePredictedTotal), 0.72, 1.28).toFixed(3)),
+    homeShareShift: Number(clamp((actualHomeShare - predictedHomeShare) * 0.45, -0.07, 0.07).toFixed(3)),
+    genericScorePenalty: Number(genericScorePenalty.toFixed(3)),
+    genericSwitchThreshold: 0.76,
+    lowGoalRate: Number((totals.lowGoal / count).toFixed(3)),
+    highGoalRate: Number((totals.highGoal / count).toFixed(3)),
+    drawActualRate: Number((totals.actualDraw / count).toFixed(3)),
+    drawPredictedRate: Number((totals.predictedDraw / count).toFixed(3)),
+    genericShare: Number(genericShare.toFixed(3)),
+    genericExactRate: Number(genericExactRate.toFixed(3))
+  };
+}
+
 function buildQipState(audit = [], dateKey = todayDateKey()) {
   const lessonCount = audit.length;
   if (!lessonCount) {
@@ -1555,6 +1777,15 @@ function buildQipState(audit = [], dateKey = todayDateKey()) {
       confidenceMultiplier: 1,
       drawLift: 0,
       componentMultipliers: { market: 1, historicalSquad: 1, liveTournament: 1, expertMedia: 1 },
+      scoreCalibration: {
+        averageActualTotal: 2.5,
+        averagePredictedTotal: 2.5,
+        totalGoalMultiplier: 1,
+        homeShareShift: 0,
+        genericScorePenalty: 0.88,
+        lowGoalRate: 0,
+        highGoalRate: 0
+      },
       teamAdjustments: {},
       rationale: ["QIP is waiting for completed match outcomes before changing model behavior."]
     };
@@ -1580,6 +1811,7 @@ function buildQipState(audit = [], dateKey = todayDateKey()) {
     liveTournament: Number(clamp(1 + (hitRate - 0.5) * 0.16, 0.92, 1.1).toFixed(3)),
     expertMedia: 1
   };
+  const scoreCalibration = buildScoreCalibration(audit);
 
   const teamMemory = new Map();
   for (const row of audit) {
@@ -1618,7 +1850,8 @@ function buildQipState(audit = [], dateKey = todayDateKey()) {
     drawLift > 0
       ? `Draw probability receives a ${drawLift} pt lift because ${drawMisses} missed calls landed as draws.`
       : "No draw correction is active from the current mistake pattern.",
-    `Market and squad weights are recalibrated from their observed hit rates at this refresh.`
+    `Market and squad weights are recalibrated from their observed hit rates at this refresh.`,
+    `Scorelines use a ${scoreCalibration.totalGoalMultiplier}x tournament goal-tempo multiplier and a ${scoreCalibration.genericScorePenalty}x penalty on overused 2-1/1-2 templates.`
   ];
 
   return {
@@ -1630,6 +1863,7 @@ function buildQipState(audit = [], dateKey = todayDateKey()) {
     confidenceMultiplier,
     drawLift,
     componentMultipliers,
+    scoreCalibration,
     teamAdjustments,
     rationale
   };
@@ -1713,6 +1947,7 @@ async function buildSignals(dateKey = todayDateKey()) {
       confidenceMultiplier: qipState.confidenceMultiplier,
       drawLift: qipState.drawLift,
       componentMultipliers: qipState.componentMultipliers,
+      scoreCalibration: qipState.scoreCalibration,
       rationale: qipState.rationale
     },
     summary: {
@@ -1810,6 +2045,7 @@ function projectGroupStandings(games, audit, squads, qipState, mode, dateKey) {
   const groupGames = games.filter((item) => item.type === "group" && knownFixture(item));
   const groupTotals = new Map();
   const groupActuals = new Map();
+  const projectedResults = [];
   for (const game of groupGames) {
     groupTotals.set(game.group, (groupTotals.get(game.group) || 0) + 1);
     if (!table.has(game.group)) table.set(game.group, new Map());
@@ -1826,6 +2062,19 @@ function projectGroupStandings(games, audit, squads, qipState, mode, dateKey) {
     }
     if (mode !== "signal") continue;
     const { prediction } = signalPredictionForGame(game, squads, null, qipState);
+    projectedResults.push({
+      id: game.id,
+      group: game.group,
+      dateKey: gameDateKey(game),
+      gmt: game.gmt,
+      home: game.home_team_name_en,
+      away: game.away_team_name_en,
+      score: prediction.scorePrediction.shortLabel,
+      expectedGoals: prediction.scorePrediction.expectedGoals,
+      candidates: prediction.scorePrediction.candidates?.slice(0, 4) || [],
+      confidence: prediction.confidence,
+      source: "QIP-calibrated group projection"
+    });
     addStandingResult(
       table,
       game.group,
@@ -1850,7 +2099,7 @@ function projectGroupStandings(games, audit, squads, qipState, mode, dateKey) {
     .map((rows) => rows[2])
     .filter(Boolean)
     .sort((a, b) => b.points - a.points || b.gd - a.gd || b.gf - a.gf || a.team.localeCompare(b.team));
-  return { groups, thirdRankings, groupStatus, mode, dateKey };
+  return { groups, thirdRankings, groupStatus, projectedResults, mode, dateKey };
 }
 
 function resolveSlotLabel(label, standings) {
@@ -1963,6 +2212,7 @@ async function buildKnockoutProjection(dateKey = todayDateKey(), mode = "signal"
       lessonCount: qipState.lessonCount,
       confidenceMultiplier: qipState.confidenceMultiplier,
       drawLift: qipState.drawLift,
+      scoreCalibration: qipState.scoreCalibration,
       rationale: qipState.rationale
     }
   };
