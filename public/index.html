@@ -18,24 +18,19 @@
           </div>
           <div>
             <p class="eyebrow">FIFA World Cup 2026</p>
-            <h1>Signal Room</h1>
+            <h1><span>Signal</span> <span>Room</span></h1>
+            <p class="brand-subtitle">Match intelligence, squad signals, live tournament model</p>
           </div>
         </div>
-        <div class="header-live">
-          <div class="live-card">
-            <span>Feed</span>
-            <strong>Public + Licensed</strong>
+        <div class="top-actions" aria-label="Dashboard controls">
+          <div class="date-field">
+            <label for="matchDateInput">Match Date</label>
+            <input id="matchDateInput" type="date" aria-label="Match date">
           </div>
-          <div class="live-card">
-            <span>Model</span>
-            <strong>xT Pulse</strong>
-          </div>
-          <div class="top-actions" aria-label="Dashboard controls">
-            <button class="icon-button" id="refreshButton" type="button" title="Refresh data" aria-label="Refresh data">
-              <span aria-hidden="true">↻</span>
-            </button>
-            <div class="status-chip" id="refreshStatus">Initializing</div>
-          </div>
+          <button class="icon-button" id="refreshButton" type="button" title="Refresh data" aria-label="Refresh data">
+            <span aria-hidden="true">↻</span>
+          </button>
+          <div class="status-chip" id="refreshStatus">Initializing</div>
         </div>
       </header>
 
@@ -45,9 +40,9 @@
           <button class="tab" data-view="team-room" type="button">Team Room</button>
           <button class="tab" data-view="match-room" type="button">Match Room</button>
           <button class="tab" data-view="match-lab" type="button">Match Lab</button>
+          <button class="tab" data-view="knockout" type="button">Knockout</button>
           <button class="tab" data-view="access" type="button">Access Matrix</button>
         </nav>
-        <div class="source-ticker" id="sourceTicker">Source sync pending</div>
       </div>
 
       <main>
@@ -96,14 +91,28 @@
               </div>
             </div>
 
-            <div class="panel reference-panel">
+            <div class="panel players-panel">
               <div class="panel-header">
                 <div>
-                  <h2>Momentum Wall</h2>
-                  <p>Reference plots</p>
+                  <h2>Players</h2>
+                  <p>Sortable squad intelligence table</p>
                 </div>
               </div>
-              <div class="reference-grid" id="referenceGrid"></div>
+              <div class="table-wrap player-table-wrap">
+                <table class="players-table">
+                  <thead>
+                    <tr>
+                      <th data-sort="name">Player</th>
+                      <th data-sort="team">Team</th>
+                      <th data-sort="position">Pos</th>
+                      <th data-sort="club">Club</th>
+                      <th data-sort="caps">Caps</th>
+                      <th data-sort="goals">Goals</th>
+                    </tr>
+                  </thead>
+                  <tbody id="playerRows"></tbody>
+                </table>
+              </div>
             </div>
           </section>
         </section>
@@ -327,6 +336,18 @@
               </div>
             </div>
             <div class="source-grid" id="sourceGrid"></div>
+          </section>
+        </section>
+
+        <section class="view" id="knockout">
+          <section class="panel knockout-panel">
+            <div class="panel-header">
+              <div>
+                <h2>Knockout</h2>
+                <p>Round of 32 to final, GMT schedule</p>
+              </div>
+            </div>
+            <div class="knockout-scroll" id="knockoutBracket"></div>
           </section>
         </section>
       </main>

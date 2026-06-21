@@ -245,6 +245,10 @@ function normalizeProbabilities(odds) {
 
 const GMT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
+function todayDateKey() {
+  return new Date().toISOString().slice(0, 10).replaceAll("-", "");
+}
+
 function gmtLabel(date) {
   const day = String(date.getUTCDate()).padStart(2, "0");
   const hour = String(date.getUTCHours()).padStart(2, "0");
@@ -272,6 +276,48 @@ function gmtFromOpenFootball(date, time) {
   const utc = new Date(`${date}T00:00:00.000Z`);
   utc.setUTCHours(hour - offset, minute, 0, 0);
   return gmtFromIso(utc.toISOString());
+}
+
+function stadiumTimeZone(stadium = {}) {
+  const city = String(stadium.city_en || "");
+  if (city.includes("Mexico City") || city.includes("Guadalajara")) return "America/Mexico_City";
+  if (city.includes("Monterrey")) return "America/Monterrey";
+  if (city.includes("Dallas") || city.includes("Houston") || city.includes("Kansas City")) return "America/Chicago";
+  if (city.includes("Los Angeles") || city.includes("Seattle") || city.includes("San Francisco")) return "America/Los_Angeles";
+  if (city.includes("Vancouver")) return "America/Vancouver";
+  if (city.includes("Toronto")) return "America/Toronto";
+  if (city.includes("Atlanta") || city.includes("Miami") || city.includes("Boston") || city.includes("Philadelphia") || city.includes("New York")) {
+    return "America/New_York";
+  }
+  return "";
+}
+
+function timeZoneOffsetMs(date, timeZone) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+  const hour = Number(values.hour) % 24;
+  const asUtc = Date.UTC(Number(values.year), Number(values.month) - 1, Number(values.day), hour, Number(values.minute), Number(values.second));
+  return asUtc - date.getTime();
+}
+
+function gmtFromRepoLocalDate(value, stadium) {
+  const match = String(value || "").match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{1,2}):(\d{2})/);
+  const timeZone = stadiumTimeZone(stadium);
+  if (!match || !timeZone) return null;
+  const [, month, day, year, hour, minute] = match;
+  const localAsUtc = Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), 0);
+  const firstPass = new Date(localAsUtc - timeZoneOffsetMs(new Date(localAsUtc), timeZone));
+  const secondPass = new Date(localAsUtc - timeZoneOffsetMs(firstPass, timeZone));
+  return gmtFromIso(secondPass.toISOString());
 }
 
 function teamStatNumber(stats, keys) {
@@ -839,7 +885,9 @@ async function getWorldcupRepoData() {
       teamKey(item.team1) === teamKey(homeTeam?.name_en) &&
       teamKey(item.team2) === teamKey(awayTeam?.name_en)
     );
-    const gmt = openFootballMatch ? gmtFromOpenFootball(openFootballMatch.date, openFootballMatch.time) : null;
+    const gmt = openFootballMatch
+      ? gmtFromOpenFootball(openFootballMatch.date, openFootballMatch.time)
+      : gmtFromRepoLocalDate(match.local_date, stadium);
     return {
       ...match,
       home_team_name_en: homeTeam?.name_en,
@@ -1182,7 +1230,7 @@ function findEventForMatch(events, match) {
   });
 }
 
-async function buildSignalDay(dateKey = "20260620") {
+async function buildSignalDay(dateKey = todayDateKey()) {
   const [openFootball, worldcupRepo, squads, espnEvents] = await Promise.all([
     fetchJson(OPENFOOTBALL_2026, { ttl: CACHE_MS }),
     getWorldcupRepoData(),
@@ -1231,7 +1279,9 @@ async function buildSignalDay(dateKey = "20260620") {
   );
 
   const matches = preparedMatches.map(({ match, event, summary, homeProfile, awayProfile, resolvedMatch }, index) => {
-    const gmt = gmtFromIso(summary?.date) || gmtFromOpenFootball(match.date, match.openFootballCrossCheck?.time);
+    const gmt = gmtFromIso(summary?.date)
+      || match.githubMatch?.gmt
+      || gmtFromOpenFootball(match.date, match.openFootballCrossCheck?.time);
     const expertMedia = expertSignals[index];
     const predictionModel = buildPredictionModel(resolvedMatch, homeProfile, awayProfile, summary, expertMedia);
     return {
@@ -1649,7 +1699,7 @@ async function handleApi(req, res, url) {
         fetchJson(`${STATSBOMB_BASE}/competitions.json`, { ttl: CACHE_MS }),
         getWorldcupRepoData(),
         getSquads(),
-        probeJson(`${ESPN_BASE}/scoreboard?dates=20260620&limit=100`),
+        probeJson(`${ESPN_BASE}/scoreboard?dates=${todayDateKey()}&limit=100`),
         probeBallDontLie(),
         probeJson("https://api.football-data.org/v4/competitions/WC/matches")
       ]);
@@ -1806,7 +1856,7 @@ async function handleApi(req, res, url) {
     }
 
     if (url.pathname === "/api/signal-day") {
-      const dateKey = url.searchParams.get("date") || "20260620";
+      const dateKey = url.searchParams.get("date") || todayDateKey();
       const day = await buildSignalDay(dateKey);
       const bdl = await getBallDontLieOverview();
       day.ballDontLie = {
@@ -1822,7 +1872,7 @@ async function handleApi(req, res, url) {
     }
 
     if (url.pathname === "/api/team-room") {
-      const dateKey = url.searchParams.get("date") || "20260620";
+      const dateKey = url.searchParams.get("date") || todayDateKey();
       const teamName = url.searchParams.get("team");
       if (!teamName) {
         badRequest(res, "team is required");
@@ -1864,7 +1914,7 @@ async function handleApi(req, res, url) {
 
     if (url.pathname === "/api/matchup-lab") {
       const squads = await getSquads();
-      const dateKey = url.searchParams.get("date") || "20260620";
+      const dateKey = url.searchParams.get("date") || todayDateKey();
       const requestedHome = url.searchParams.get("home") || "Netherlands";
       const requestedAway = url.searchParams.get("away") || "Sweden";
       const homeSquad = findSquad(squads, requestedHome) || squads.teams[0];
@@ -1949,7 +1999,7 @@ async function handleApi(req, res, url) {
     }
 
     if (url.pathname === "/api/match-room") {
-      const dateKey = url.searchParams.get("date") || "20260620";
+      const dateKey = url.searchParams.get("date") || todayDateKey();
       const eventId = url.searchParams.get("eventId");
       const [day, squads] = await Promise.all([buildSignalDay(dateKey), getSquads()]);
       const match = day.matches.find((item) => item.eventId === eventId) || day.matches[0] || null;

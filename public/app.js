@@ -7,13 +7,13 @@ const state = {
   squads: null,
   matchupLab: null,
   matchupRequestId: 0,
+  playerSort: { key: "goals", direction: "desc" },
   competitions: [],
   matches: [],
   activeMatch: null
 };
 
 const API_BASE = window.location.protocol === "file:" ? "http://localhost:4173" : "";
-const DEFAULT_DATE = "20260620";
 const GMT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -40,6 +40,36 @@ function withRefresh(url, refreshToken) {
   if (!refreshToken) return url;
   const separator = url.includes("?") ? "&" : "?";
   return `${url}${separator}refresh=${encodeURIComponent(refreshToken)}`;
+}
+
+function todayDateKey() {
+  return new Date().toISOString().slice(0, 10).replaceAll("-", "");
+}
+
+function inputDateToKey(value) {
+  return String(value || "").replaceAll("-", "") || todayDateKey();
+}
+
+function keyToInputDate(value) {
+  const key = String(value || todayDateKey());
+  if (!/^\d{8}$/.test(key)) return keyToInputDate(todayDateKey());
+  return `${key.slice(0, 4)}-${key.slice(4, 6)}-${key.slice(6, 8)}`;
+}
+
+function selectedDateKey() {
+  return inputDateToKey($("#matchDateInput")?.value);
+}
+
+function setSelectedDate(key) {
+  const input = $("#matchDateInput");
+  if (input) input.value = keyToInputDate(key);
+}
+
+function refreshTimeLabel() {
+  const now = new Date();
+  const hour = String(now.getUTCHours()).padStart(2, "0");
+  const minute = String(now.getUTCMinutes()).padStart(2, "0");
+  return `Live ${hour}:${minute} GMT`;
 }
 
 function escapeHtml(value) {
@@ -148,6 +178,7 @@ function renderMetrics() {
 
 function renderSourceTicker() {
   const ticker = $("#sourceTicker");
+  if (!ticker) return;
   const sources = state.sources?.sources || [];
   const connected = sources.filter((source) => source.status === "connected").length;
   const locked = sources.filter((source) => source.status === "locked" || source.status === "licensed_only").length;
@@ -278,6 +309,7 @@ function renderTodayMatches() {
 
 function renderImages(images = []) {
   const grid = $("#referenceGrid");
+  if (!grid) return;
   if (!images.length) {
     grid.innerHTML = `<div class="empty">No local reference images found.</div>`;
     return;
@@ -289,6 +321,140 @@ function renderImages(images = []) {
     card.innerHTML = `<img src="${escapeHtml(src)}" alt="${escapeHtml(image.name)}">`;
     return card;
   }));
+}
+
+function allSquadPlayers() {
+  return (state.squads?.teams || []).flatMap((team) =>
+    (team.players || []).map((player) => ({
+      ...player,
+      team: team.team,
+      code: team.code,
+      name: player.shirtName || player.playerName || `${player.firstNames || ""} ${player.lastNames || ""}`.trim()
+    }))
+  );
+}
+
+function playerSortValue(player, key) {
+  if (key === "caps" || key === "goals") return Number(player[key] || 0);
+  return String(player[key] || "").toLowerCase();
+}
+
+function sortedSquadPlayers() {
+  const { key, direction } = state.playerSort;
+  const multiplier = direction === "asc" ? 1 : -1;
+  return allSquadPlayers().sort((a, b) => {
+    const left = playerSortValue(a, key);
+    const right = playerSortValue(b, key);
+    if (typeof left === "number" && typeof right === "number") {
+      return (left - right || String(a.name).localeCompare(String(b.name))) * multiplier;
+    }
+    return (String(left).localeCompare(String(right)) || String(a.name).localeCompare(String(b.name))) * multiplier;
+  });
+}
+
+function renderPlayersTable() {
+  const rows = $("#playerRows");
+  if (!rows) return;
+  const players = sortedSquadPlayers();
+  if (!players.length) {
+    rows.innerHTML = `<tr><td colspan="6" class="empty">No squad players loaded yet.</td></tr>`;
+    return;
+  }
+  rows.replaceChildren(...players.map((player) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="player-table-name">
+        ${playerPhotoMarkup(player, "table-player-photo")}
+        <div>
+          <strong>${escapeHtml(player.name || player.playerName)}</strong>
+          <small>#${escapeHtml(player.number || "")} · ${escapeHtml(player.playerName || "")}</small>
+        </div>
+      </td>
+      <td>${escapeHtml(player.team)}${player.code ? `<br><small>${escapeHtml(player.code)}</small>` : ""}</td>
+      <td><span class="position-pill">${escapeHtml(player.position || "TBD")}</span></td>
+      <td>${escapeHtml(player.club || "Club TBA")}</td>
+      <td>${escapeHtml(player.caps ?? 0)}</td>
+      <td>${escapeHtml(player.goals ?? 0)}</td>
+    `;
+    return tr;
+  }));
+
+  $$(".players-table th[data-sort]").forEach((header) => {
+    header.dataset.active = header.dataset.sort === state.playerSort.key ? state.playerSort.direction : "";
+  });
+}
+
+const KNOCKOUT_ROUNDS = [
+  ["r32", "Round of 32"],
+  ["r16", "Round of 16"],
+  ["qf", "Quarter-finals"],
+  ["sf", "Semi-finals"],
+  ["third", "Third Place"],
+  ["final", "Final"]
+];
+
+function repoLocalDateLabel(value) {
+  const match = String(value || "").match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{1,2}):(\d{2})/);
+  if (!match) return "TBD";
+  const [, month, day, year, hour, minute] = match;
+  return `${day} ${GMT_MONTHS[Number(month) - 1]}, ${hour.padStart(2, "0")}:${minute} venue`;
+}
+
+function knockoutTimeLabel(game) {
+  return game.gmt?.label || repoLocalDateLabel(game.local_date);
+}
+
+function knockoutTeamLabel(game, side) {
+  const name = side === "home" ? game.home_team_name_en : game.away_team_name_en;
+  const label = side === "home" ? game.home_team_label : game.away_team_label;
+  return name || label || "TBD";
+}
+
+function knockoutScore(game) {
+  const finished = game.finished === true || game.finished === "TRUE";
+  if (!finished) return "";
+  return `<span class="bracket-score">${escapeHtml(game.home_score ?? 0)}-${escapeHtml(game.away_score ?? 0)}</span>`;
+}
+
+function renderKnockout() {
+  const node = $("#knockoutBracket");
+  if (!node) return;
+  const games = state.worldcup26?.games || [];
+  const byRound = Object.fromEntries(KNOCKOUT_ROUNDS.map(([type]) => [type, []]));
+  games
+    .filter((game) => game.type && game.type !== "group")
+    .forEach((game) => {
+      if (byRound[game.type]) byRound[game.type].push(game);
+    });
+
+  node.innerHTML = KNOCKOUT_ROUNDS.map(([type, label]) => {
+    const roundGames = [...(byRound[type] || [])].sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
+    return `
+      <section class="knockout-round ${escapeHtml(type)}">
+        <h3>${escapeHtml(label)}</h3>
+        <div class="bracket-stack">
+          ${roundGames.length ? roundGames.map((game) => `
+            <article class="bracket-card">
+              <div class="bracket-meta">
+                <span>Match ${escapeHtml(game.id || "")}</span>
+                <b>${escapeHtml(knockoutTimeLabel(game))}</b>
+              </div>
+              <div class="bracket-team">
+                <span>${escapeHtml(knockoutTeamLabel(game, "home"))}</span>
+                ${game.home_team_code ? `<em>${escapeHtml(game.home_team_code)}</em>` : ""}
+              </div>
+              <div class="bracket-team">
+                <span>${escapeHtml(knockoutTeamLabel(game, "away"))}</span>
+                ${game.away_team_code ? `<em>${escapeHtml(game.away_team_code)}</em>` : ""}
+              </div>
+              ${knockoutScore(game)}
+              <small>${escapeHtml(game.stadium_name || "")}${game.city_en ? ` · ${escapeHtml(game.city_en)}` : ""}</small>
+            </article>
+          `).join("") : `<div class="empty">No fixtures mapped for this round yet.</div>`}
+        </div>
+      </section>
+    `;
+  }).join("");
 }
 
 function renderSources() {
@@ -997,6 +1163,7 @@ async function loadWorldcup26(options = {}) {
   state.worldcup26 = await getJson("/api/worldcup26", options);
   renderMetrics();
   renderFixtures();
+  renderKnockout();
   renderSourceTicker();
 }
 
@@ -1008,7 +1175,7 @@ async function loadSources(options = {}) {
 }
 
 async function loadSignalDay(options = {}) {
-  state.signalDay = await getJson(`/api/signal-day?date=${DEFAULT_DATE}`, options);
+  state.signalDay = await getJson(`/api/signal-day?date=${selectedDateKey()}`, options);
   renderControls(options.selection);
   renderTodayMatches();
   renderMetrics();
@@ -1018,19 +1185,20 @@ async function loadSignalDay(options = {}) {
 async function loadTeamRoom(options = {}) {
   const team = $("#teamRoomSelect")?.value || $("#favoriteTeamSelect").value || state.signalDay?.teams?.[0] || state.squads?.teams?.[0]?.team;
   if (!team) return;
-  state.teamRoom = await getJson(`/api/team-room?date=${DEFAULT_DATE}&team=${encodeURIComponent(team)}`, options);
+  state.teamRoom = await getJson(`/api/team-room?date=${selectedDateKey()}&team=${encodeURIComponent(team)}`, options);
   renderTeamRoom(state.teamRoom);
 }
 
 async function loadMatchRoom(options = {}) {
   const selected = $("#todayMatchSelect").selectedOptions[0];
   const eventId = selected?.value?.startsWith("index-") ? "" : selected?.value || "";
-  state.matchRoom = await getJson(`/api/match-room?date=${DEFAULT_DATE}${eventId ? `&eventId=${encodeURIComponent(eventId)}` : ""}`, options);
+  state.matchRoom = await getJson(`/api/match-room?date=${selectedDateKey()}${eventId ? `&eventId=${encodeURIComponent(eventId)}` : ""}`, options);
   renderMatchRoom(state.matchRoom);
 }
 
 async function loadSquads(options = {}) {
   state.squads = await getJson("/api/squads", options);
+  renderPlayersTable();
   renderTeamRoomControls(options.selection);
   renderMatchupControls(options.selection);
 }
@@ -1048,7 +1216,7 @@ async function loadMatchupLab(options = {}) {
   const home = homeSelect.value;
   const away = awaySelect.value;
   const result = await getJson(
-    `/api/matchup-lab?date=${DEFAULT_DATE}&home=${encodeURIComponent(home)}&away=${encodeURIComponent(away)}`,
+    `/api/matchup-lab?date=${selectedDateKey()}&home=${encodeURIComponent(home)}&away=${encodeURIComponent(away)}`,
     options
   );
   if (requestId !== state.matchupRequestId) return;
@@ -1091,6 +1259,7 @@ async function loadImages(options = {}) {
 
 async function refreshAll(options = {}) {
   try {
+    if (options.today) setSelectedDate(todayDateKey());
     const selection = captureSelection();
     const refreshToken = options.force ? String(Date.now()) : "";
     const requestOptions = { refreshToken };
@@ -1100,7 +1269,6 @@ async function refreshAll(options = {}) {
     await Promise.all([
       loadSources(requestOptions),
       loadWorldcup26(requestOptions),
-      loadImages(requestOptions),
       loadSquads({ ...requestOptions, selection }),
       loadSignalDay({ ...requestOptions, selection })
     ]);
@@ -1109,7 +1277,7 @@ async function refreshAll(options = {}) {
       loadMatchRoom(requestOptions),
       loadMatchupLab(requestOptions)
     ]);
-    setStatus("Live");
+    setStatus(refreshTimeLabel());
   } catch (error) {
     console.error(error);
     setStatus("Error", "error");
@@ -1121,6 +1289,10 @@ async function refreshAll(options = {}) {
   } finally {
     $("#refreshButton").disabled = false;
   }
+}
+
+function initializeDateControl() {
+  setSelectedDate(todayDateKey());
 }
 
 function bindEvents() {
@@ -1148,8 +1320,20 @@ function bindEvents() {
     await loadMatchRoom();
     switchView("match-room");
   });
-  $("#refreshButton").addEventListener("click", () => refreshAll({ force: true }));
+  $("#refreshButton").addEventListener("click", () => refreshAll({ force: true, today: true }));
+  $("#matchDateInput").addEventListener("change", () => refreshAll({ force: true }));
+  $$(".players-table th[data-sort]").forEach((header) => {
+    header.addEventListener("click", () => {
+      const key = header.dataset.sort;
+      state.playerSort = {
+        key,
+        direction: state.playerSort.key === key && state.playerSort.direction === "desc" ? "asc" : "desc"
+      };
+      renderPlayersTable();
+    });
+  });
 }
 
+initializeDateControl();
 bindEvents();
 refreshAll();
