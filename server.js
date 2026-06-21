@@ -439,6 +439,41 @@ function scaleExpertWeight(weights, scale) {
   };
 }
 
+function normalizeWeights(weights) {
+  const total = Object.values(weights).reduce((sum, value) => sum + Number(value || 0), 0) || 1;
+  return Object.fromEntries(Object.entries(weights).map(([key, value]) => [key, Number((Number(value || 0) / total).toFixed(3))]));
+}
+
+function applyQipWeights(weights, qipState) {
+  if (!qipState?.active) return weights;
+  const multipliers = qipState.componentMultipliers || {};
+  return normalizeWeights({
+    market: Number(weights.market || 0) * Number(multipliers.market || 1),
+    historicalSquad: Number(weights.historicalSquad || 0) * Number(multipliers.historicalSquad || 1),
+    liveTournament: Number(weights.liveTournament || 0) * Number(multipliers.liveTournament || 1),
+    expertMedia: Number(weights.expertMedia || 0) * Number(multipliers.expertMedia || 1)
+  });
+}
+
+function adjustQipProbabilities(probabilities, match, qipState) {
+  if (!qipState?.active) return probabilities;
+  const teamAdjustments = qipState.teamAdjustments || {};
+  const homeFactor = Number(teamAdjustments[teamKey(match.home)]?.factor || 1);
+  const awayFactor = Number(teamAdjustments[teamKey(match.away)]?.factor || 1);
+  const drawLift = Number(qipState.drawLift || 0);
+  const adjusted = {
+    home: Number(probabilities.home || 0) * homeFactor,
+    draw: Number(probabilities.draw || 0) + drawLift,
+    away: Number(probabilities.away || 0) * awayFactor
+  };
+  const total = adjusted.home + adjusted.draw + adjusted.away || 1;
+  return {
+    home: Number((adjusted.home / total * 100).toFixed(1)),
+    draw: Number((adjusted.draw / total * 100).toFixed(1)),
+    away: Number((adjusted.away / total * 100).toFixed(1))
+  };
+}
+
 function scorePrediction(match, probabilities, summary, confidence) {
   const totalGoals = clamp(Number(summary?.odds?.overUnder || 2.5), 1.5, 4.5);
   const homeWin = Number(probabilities.home || 0);
@@ -475,7 +510,7 @@ function scorePrediction(match, probabilities, summary, confidence) {
   };
 }
 
-function buildPredictionModel(match, homeProfile, awayProfile, summary, expertSignal = null) {
+function buildPredictionModel(match, homeProfile, awayProfile, summary, expertSignal = null, qipState = null) {
   const homeHistorical = squadPower(homeProfile);
   const awayHistorical = squadPower(awayProfile);
   const homeLive = liveTeamPower(summary?.home);
@@ -488,22 +523,25 @@ function buildPredictionModel(match, homeProfile, awayProfile, summary, expertSi
   const market = summary?.odds?.probabilities || null;
   const hasExpertNotes = Number(expertSignal?.noteCount || 0) >= 3;
   const expert = hasExpertNotes ? expertSignal.probabilities : null;
-  const weights = expert && !expertSignal?.usable
+  const baseWeights = expert && !expertSignal?.usable
     ? scaleExpertWeight(predictionWeights(Boolean(market), true), 0.45)
     : predictionWeights(Boolean(market), Boolean(expert));
-  const probabilities = weightedProbabilities([
+  const weights = applyQipWeights(baseWeights, qipState);
+  const rawProbabilities = weightedProbabilities([
     { probabilities: market, weight: weights.market },
     { probabilities: historicalModel, weight: weights.historicalSquad },
     { probabilities: liveModel, weight: weights.liveTournament },
     { probabilities: expert, weight: weights.expertMedia }
   ]);
+  const probabilities = adjustQipProbabilities(rawProbabilities, match, qipState);
   const favorite =
     probabilities.home >= probabilities.away && probabilities.home >= probabilities.draw
       ? match.home
       : probabilities.away >= probabilities.draw
         ? match.away
         : "Draw";
-  const confidence = clamp(Math.max(probabilities.home, probabilities.draw, probabilities.away) - 33.3, 0, 66.7);
+  const rawConfidence = clamp(Math.max(probabilities.home, probabilities.draw, probabilities.away) - 33.3, 0, 66.7);
+  const confidence = clamp(rawConfidence * Number(qipState?.confidenceMultiplier || 1), 0, 66.7);
   const score = scorePrediction(match, probabilities, summary, confidence);
   const edges = [];
   const capsGap = Number(Math.abs((homeProfile?.averageCaps || 0) - (awayProfile?.averageCaps || 0)).toFixed(1));
@@ -562,7 +600,22 @@ function buildPredictionModel(match, homeProfile, awayProfile, summary, expertSi
       } : null,
       weights
     },
-    edges
+    edges,
+    qip: qipState?.active ? {
+      active: true,
+      heartbeat: qipState.heartbeat,
+      lessonCount: qipState.lessonCount,
+      confidenceMultiplier: qipState.confidenceMultiplier,
+      drawLift: qipState.drawLift,
+      rationale: qipState.rationale,
+      teamAdjustment: {
+        home: qipState.teamAdjustments?.[teamKey(match.home)] || null,
+        away: qipState.teamAdjustments?.[teamKey(match.away)] || null
+      },
+      baseWeights,
+      adjustedWeights: weights,
+      rawProbabilities
+    } : { active: false }
   };
 }
 
@@ -1376,7 +1429,7 @@ function brierScore(probabilities, outcome) {
   return Number(((home - actual.home) ** 2 + (draw - actual.draw) ** 2 + (away - actual.away) ** 2).toFixed(3));
 }
 
-function signalPredictionForGame(game, squads, summary = null) {
+function signalPredictionForGame(game, squads, summary = null, qipState = null) {
   const match = {
     eventId: summary?.eventId || null,
     group: game.group,
@@ -1388,9 +1441,18 @@ function signalPredictionForGame(game, squads, summary = null) {
   const alignedSummary = alignSummaryToMatch(summary, match);
   const homeSquad = findSquad(squads, match.home);
   const awaySquad = findSquad(squads, match.away);
-  const prediction = buildPredictionModel(match, squadStats(homeSquad), squadStats(awaySquad), alignedSummary, null);
+  const prediction = buildPredictionModel(match, squadStats(homeSquad), squadStats(awaySquad), alignedSummary, null, qipState);
   return { match, prediction, summary: alignedSummary };
 }
+
+const KNOCKOUT_TYPES = [
+  ["r32", "Round of 32"],
+  ["r16", "Round of 16"],
+  ["qf", "Quarter-finals"],
+  ["sf", "Semi-finals"],
+  ["third", "Third Place"],
+  ["final", "Final"]
+];
 
 function accuracySeries(rows) {
   const byDate = new Map();
@@ -1418,12 +1480,15 @@ function accuracySeries(rows) {
   });
 }
 
-async function buildSignals(dateKey = todayDateKey()) {
-  const [worldcupRepo, squads] = await Promise.all([getWorldcupRepoData(), getSquads()]);
+async function buildQipAuditRows(dateKey = todayDateKey(), worldcupRepo = null, squads = null) {
+  const [repoData, squadData] = await Promise.all([
+    worldcupRepo ? Promise.resolve(worldcupRepo) : getWorldcupRepoData(),
+    squads ? Promise.resolve(squads) : getSquads()
+  ]);
   const auditDates = dateKeyRange("20260611", dateKey);
   const scoreboardSets = await Promise.all(auditDates.map((key) => fetchEspnScoreboardDate(key)));
   const events = scoreboardSets.flat();
-  const knownGames = (worldcupRepo.games || []).filter(knownFixture);
+  const knownGames = (repoData.games || []).filter(knownFixture);
   const completedPairs = knownGames
     .filter((game) => gameDateKey(game) <= dateKey)
     .map((game) => ({ game, event: findEventForMatch(events, game) }))
@@ -1435,7 +1500,7 @@ async function buildSignals(dateKey = todayDateKey()) {
 
   const audit = completedPairs.map(({ game, event }, index) => {
     const summary = summaries[index] || compactScoreboardSummary(event);
-    const { match, prediction, summary: alignedSummary } = signalPredictionForGame(game, squads, summary);
+    const { match, prediction, summary: alignedSummary } = signalPredictionForGame(game, squadData, summary);
     const homeScore = Number(alignedSummary?.home?.score ?? 0);
     const awayScore = Number(alignedSummary?.away?.score ?? 0);
     const predictedOutcome = predictionOutcome(prediction, match);
@@ -1464,11 +1529,123 @@ async function buildSignals(dateKey = todayDateKey()) {
     };
   }).sort((a, b) => String(a.gmt?.iso || "").localeCompare(String(b.gmt?.iso || "")));
 
-  const completedIds = new Set(completedPairs.map(({ game }) => String(game.id)));
+  return { audit, completedPairs, knownGames, worldcupRepo: repoData, squads: squadData };
+}
+
+function buildQipState(audit = [], dateKey = todayDateKey()) {
+  const lessonCount = audit.length;
+  if (!lessonCount) {
+    return {
+      active: false,
+      dateKey,
+      heartbeat: "No completed results available for QIP calibration yet.",
+      lessonCount: 0,
+      confidenceMultiplier: 1,
+      drawLift: 0,
+      componentMultipliers: { market: 1, historicalSquad: 1, liveTournament: 1, expertMedia: 1 },
+      teamAdjustments: {},
+      rationale: ["QIP is waiting for completed match outcomes before changing model behavior."]
+    };
+  }
+
+  const correct = audit.filter((row) => row.correct);
+  const misses = audit.filter((row) => !row.correct);
+  const avg = (rows, key) => rows.reduce((sum, row) => sum + Number(row[key] || 0), 0) / Math.max(1, rows.length);
+  const hitRate = correct.length / lessonCount;
+  const avgCorrectConfidence = avg(correct, "confidence");
+  const avgMissConfidence = avg(misses, "confidence");
+  const overconfidence = Math.max(0, avgMissConfidence - avgCorrectConfidence);
+  const confidenceMultiplier = Number(clamp(1 - overconfidence / 140 - Math.max(0, 0.62 - hitRate) * 0.22, 0.78, 1.08).toFixed(3));
+  const drawMisses = misses.filter((row) => row.actualOutcome === "draw" && row.predictedOutcome !== "draw").length;
+  const drawLift = Number(clamp(drawMisses / Math.max(1, lessonCount) * 9, 0, 4.5).toFixed(2));
+  const marketRows = audit.filter((row) => Number(row.weights?.market || 0) > 0);
+  const marketHitRate = marketRows.filter((row) => row.correct).length / Math.max(1, marketRows.length);
+  const historicalRows = audit.filter((row) => Number(row.weights?.historicalSquad || 0) > 0);
+  const historicalHitRate = historicalRows.filter((row) => row.correct).length / Math.max(1, historicalRows.length);
+  const componentMultipliers = {
+    market: Number(clamp(1 + (marketHitRate - hitRate) * 0.35, 0.88, 1.12).toFixed(3)),
+    historicalSquad: Number(clamp(1 + (historicalHitRate - hitRate) * 0.25, 0.9, 1.12).toFixed(3)),
+    liveTournament: Number(clamp(1 + (hitRate - 0.5) * 0.16, 0.92, 1.1).toFixed(3)),
+    expertMedia: 1
+  };
+
+  const teamMemory = new Map();
+  for (const row of audit) {
+    for (const team of [row.home, row.away]) {
+      const key = teamKey(team);
+      if (!teamMemory.has(key)) teamMemory.set(key, { team, calls: 0, correct: 0, overcalled: 0 });
+      const memory = teamMemory.get(key);
+      const wasPredicted = teamKey(row.predictedWinner) === key;
+      const won = teamKey(row.actualWinner) === key;
+      if (wasPredicted) {
+        memory.calls += 1;
+        if (won) memory.correct += 1;
+        else memory.overcalled += 1;
+      }
+    }
+  }
+  const teamAdjustments = {};
+  for (const [key, memory] of teamMemory.entries()) {
+    if (!memory.calls) continue;
+    const teamHit = memory.correct / memory.calls;
+    const factor = Number(clamp(1 + (teamHit - hitRate) * 0.16 - memory.overcalled / memory.calls * 0.06, 0.9, 1.1).toFixed(3));
+    if (Math.abs(factor - 1) >= 0.015) {
+      teamAdjustments[key] = {
+        team: memory.team,
+        factor,
+        evidence: `${memory.correct}/${memory.calls} correct when model favored this team`
+      };
+    }
+  }
+
+  const rationale = [
+    `QIP audited ${lessonCount} completed matches and found ${correct.length} correct outcome calls.`,
+    overconfidence > 0
+      ? `Confidence is damped because missed calls averaged ${avgMissConfidence.toFixed(1)} pts vs ${avgCorrectConfidence.toFixed(1)} pts on correct calls.`
+      : "Confidence is allowed to hold because misses are not more confident than correct calls.",
+    drawLift > 0
+      ? `Draw probability receives a ${drawLift} pt lift because ${drawMisses} missed calls landed as draws.`
+      : "No draw correction is active from the current mistake pattern.",
+    `Market and squad weights are recalibrated from their observed hit rates at this refresh.`
+  ];
+
+  return {
+    active: true,
+    dateKey,
+    heartbeat: "Agent Creates Task -> Heartbeat Picks Up -> Memory Informs Execution -> Lesson Stored",
+    lessonCount,
+    hitRate: Number((hitRate * 100).toFixed(1)),
+    confidenceMultiplier,
+    drawLift,
+    componentMultipliers,
+    teamAdjustments,
+    rationale
+  };
+}
+
+async function getQipState(dateKey = todayDateKey()) {
+  const key = `qip:${dateKey}`;
+  const cached = cache.get(key);
+  if (cached && Date.now() - cached.at < 1000 * 60 * 5) return cached.value;
+  return onceInFlight(key, async () => {
+    const { audit } = await buildQipAuditRows(dateKey);
+    const value = { ...buildQipState(audit, dateKey), audit };
+    cache.set(key, { at: Date.now(), value });
+    return value;
+  });
+}
+
+async function buildSignals(dateKey = todayDateKey()) {
+  const [worldcupRepo, squads] = await Promise.all([getWorldcupRepoData(), getSquads()]);
+  const qipState = await getQipState(dateKey);
+  const audit = qipState.audit || [];
+  const knownGames = (worldcupRepo.games || []).filter(knownFixture);
+  const completedIds = new Set(audit.map((row) => String(row.id)));
+
   const upcoming = knownGames
     .filter((game) => !completedIds.has(String(game.id)) && gameDateKey(game) >= dateKey)
     .map((game) => {
-      const { match, prediction } = signalPredictionForGame(game, squads, null);
+      const { match, prediction } = signalPredictionForGame(game, squads, null, qipState);
       const predictedOutcome = predictionOutcome(prediction, match);
       return {
         id: game.id,
@@ -1516,7 +1693,16 @@ async function buildSignals(dateKey = todayDateKey()) {
     fetchedAt: new Date().toISOString(),
     dateKey,
     source: ["Signal Room prediction model", "ESPN public API finals", "rezarahiminia/worldcup2026", "FIFA squad PDF"],
-    method: "Refresh-time reconstruction. Persisted pre-match model snapshots are not available yet.",
+    method: "QIP refresh-time reconstruction. Completed results become calibration lessons for the next prediction pass.",
+    qip: {
+      active: qipState.active,
+      heartbeat: qipState.heartbeat,
+      lessonCount: qipState.lessonCount,
+      confidenceMultiplier: qipState.confidenceMultiplier,
+      drawLift: qipState.drawLift,
+      componentMultipliers: qipState.componentMultipliers,
+      rationale: qipState.rationale
+    },
     summary: {
       auditedMatches: audit.length,
       correctCalls: correct,
@@ -1544,6 +1730,203 @@ async function buildSignals(dateKey = todayDateKey()) {
     },
     audit,
     upcoming
+  };
+}
+
+function emptyStanding(team, group) {
+  return { team, group, played: 0, points: 0, gf: 0, ga: 0, gd: 0, source: "pending" };
+}
+
+function addStandingResult(table, group, home, away, homeScore, awayScore, source) {
+  if (!table.has(group)) table.set(group, new Map());
+  const groupTable = table.get(group);
+  if (!groupTable.has(teamKey(home))) groupTable.set(teamKey(home), emptyStanding(home, group));
+  if (!groupTable.has(teamKey(away))) groupTable.set(teamKey(away), emptyStanding(away, group));
+  const homeRow = groupTable.get(teamKey(home));
+  const awayRow = groupTable.get(teamKey(away));
+  homeRow.played += 1;
+  awayRow.played += 1;
+  homeRow.gf += homeScore;
+  homeRow.ga += awayScore;
+  awayRow.gf += awayScore;
+  awayRow.ga += homeScore;
+  homeRow.gd = homeRow.gf - homeRow.ga;
+  awayRow.gd = awayRow.gf - awayRow.ga;
+  homeRow.source = source;
+  awayRow.source = source;
+  if (homeScore > awayScore) homeRow.points += 3;
+  else if (awayScore > homeScore) awayRow.points += 3;
+  else {
+    homeRow.points += 1;
+    awayRow.points += 1;
+  }
+}
+
+function sortedGroupRows(groupMap) {
+  return [...(groupMap?.values() || [])].sort((a, b) =>
+    b.points - a.points
+    || b.gd - a.gd
+    || b.gf - a.gf
+    || a.team.localeCompare(b.team)
+  );
+}
+
+function predictionForTeams(home, away, game, squads, qipState) {
+  const match = {
+    eventId: null,
+    group: game?.group || game?.type || "Knockout",
+    localDate: game?.local_date || null,
+    gmt: game?.gmt || null,
+    home,
+    away
+  };
+  const homeSquad = findSquad(squads, home);
+  const awaySquad = findSquad(squads, away);
+  const prediction = buildPredictionModel(match, squadStats(homeSquad), squadStats(awaySquad), null, null, qipState);
+  const outcome = predictionOutcome(prediction, match);
+  return { match, prediction, outcome, winner: outcomeLabel(outcome, match) };
+}
+
+function parseScore(value) {
+  const [home, away] = String(value || "0-0").split("-").map((part) => Number(part));
+  return [Number.isFinite(home) ? home : 0, Number.isFinite(away) ? away : 0];
+}
+
+function projectGroupStandings(games, audit, squads, qipState, mode, dateKey) {
+  const table = new Map();
+  const actualById = new Map(audit.map((row) => [String(row.id), row]));
+  for (const game of games.filter((item) => item.type === "group" && knownFixture(item))) {
+    if (!table.has(game.group)) table.set(game.group, new Map());
+    const groupTable = table.get(game.group);
+    for (const team of [game.home_team_name_en, game.away_team_name_en]) {
+      if (!groupTable.has(teamKey(team))) groupTable.set(teamKey(team), emptyStanding(team, game.group));
+    }
+    const actual = actualById.get(String(game.id));
+    if (actual) {
+      const [homeScore, awayScore] = parseScore(actual.result);
+      addStandingResult(table, game.group, game.home_team_name_en, game.away_team_name_en, homeScore, awayScore, "actual result");
+      continue;
+    }
+    if (mode !== "signal" || gameDateKey(game) < dateKey) continue;
+    const { prediction } = signalPredictionForGame(game, squads, null, qipState);
+    addStandingResult(
+      table,
+      game.group,
+      game.home_team_name_en,
+      game.away_team_name_en,
+      prediction.scorePrediction.homeGoals,
+      prediction.scorePrediction.awayGoals,
+      "QIP projection"
+    );
+  }
+  const groups = Object.fromEntries([...table.entries()].map(([group, groupMap]) => [group, sortedGroupRows(groupMap)]));
+  const thirdRankings = Object.values(groups)
+    .map((rows) => rows[2])
+    .filter(Boolean)
+    .sort((a, b) => b.points - a.points || b.gd - a.gd || b.gf - a.gf || a.team.localeCompare(b.team));
+  return { groups, thirdRankings };
+}
+
+function resolveSlotLabel(label, standings) {
+  const value = String(label || "");
+  let match = value.match(/^Winner Group ([A-L])$/i);
+  if (match) {
+    const team = standings.groups[match[1].toUpperCase()]?.[0];
+    return team ? { team: team.team, source: `${value}, ${team.source}` } : { team: value, source: "unresolved group winner" };
+  }
+  match = value.match(/^Runner-up Group ([A-L])$/i);
+  if (match) {
+    const team = standings.groups[match[1].toUpperCase()]?.[1];
+    return team ? { team: team.team, source: `${value}, ${team.source}` } : { team: value, source: "unresolved group runner-up" };
+  }
+  match = value.match(/^3rd Group ([A-L/]+)$/i);
+  if (match) {
+    const allowed = new Set(match[1].split("/").map((part) => part.toUpperCase()));
+    const team = standings.thirdRankings.find((row) => allowed.has(row.group));
+    return team ? { team: team.team, source: `${value}, ${team.source}` } : { team: value, source: "unresolved third-place slot" };
+  }
+  return { team: value || "TBD", source: "fixture label" };
+}
+
+function resolveKnockoutSlot(game, side, standings, winners) {
+  const team = side === "home" ? game.home_team_name_en : game.away_team_name_en;
+  if (team) return { team, source: "official fixture team" };
+  const label = side === "home" ? game.home_team_label : game.away_team_label;
+  const winnerMatch = String(label || "").match(/^Winner Match (\d+)$/i);
+  if (winnerMatch && winners.has(winnerMatch[1])) return { team: winners.get(winnerMatch[1]), source: label };
+  const loserMatch = String(label || "").match(/^Loser Match (\d+)$/i);
+  if (loserMatch) return { team: label || "TBD", source: "third-place slot unresolved" };
+  return resolveSlotLabel(label, standings);
+}
+
+async function buildKnockoutProjection(dateKey = todayDateKey(), mode = "signal") {
+  const [worldcupRepo, squads, qipState] = await Promise.all([getWorldcupRepoData(), getSquads(), getQipState(dateKey)]);
+  const audit = qipState.audit || [];
+  const games = worldcupRepo.games || [];
+  const standings = projectGroupStandings(games, audit, squads, qipState, mode, dateKey);
+  const winners = new Map();
+  const rounds = KNOCKOUT_TYPES.map(([type, label]) => ({ type, label, matches: [] }));
+  const roundByType = new Map(rounds.map((round) => [round.type, round]));
+  const confidenceByRound = [];
+
+  for (const game of games.filter((item) => item.type && item.type !== "group").sort((a, b) => Number(a.id || 0) - Number(b.id || 0))) {
+    const homeSlot = resolveKnockoutSlot(game, "home", standings, winners);
+    const awaySlot = resolveKnockoutSlot(game, "away", standings, winners);
+    let prediction = null;
+    let winner = "";
+    if (mode === "signal" && homeSlot.team && awaySlot.team && !/Match|Group|TBD/i.test(`${homeSlot.team} ${awaySlot.team}`)) {
+      const projected = predictionForTeams(homeSlot.team, awaySlot.team, game, squads, qipState);
+      prediction = {
+        favorite: projected.winner,
+        score: projected.prediction.scorePrediction.shortLabel,
+        confidence: projected.prediction.confidence,
+        probabilities: projected.prediction.probabilities,
+        qip: projected.prediction.qip
+      };
+      winner = projected.winner;
+      winners.set(String(game.id), winner);
+      confidenceByRound.push({ round: game.type, matchId: game.id, confidence: projected.prediction.confidence });
+    }
+    const row = {
+      id: game.id,
+      type: game.type,
+      gmt: game.gmt,
+      stadium: game.stadium_name,
+      city: game.city_en,
+      home: homeSlot.team || "TBD",
+      away: awaySlot.team || "TBD",
+      homeSource: homeSlot.source,
+      awaySource: awaySlot.source,
+      prediction,
+      winner
+    };
+    roundByType.get(game.type)?.matches.push(row);
+  }
+
+  const resolvedSlots = rounds.reduce((sum, round) =>
+    sum + round.matches.flatMap((match) => [match.home, match.away]).filter((team) => !/Group|Match|TBD/i.test(team)).length,
+    0
+  );
+  const avgConfidence = confidenceByRound.reduce((sum, item) => sum + item.confidence, 0) / Math.max(1, confidenceByRound.length);
+  return {
+    fetchedAt: new Date().toISOString(),
+    dateKey,
+    mode,
+    rounds,
+    standings,
+    technical: {
+      resolvedSlots,
+      projectedMatches: confidenceByRound.length,
+      averageConfidence: Number(avgConfidence.toFixed(1)),
+      confidenceByRound
+    },
+    qip: {
+      heartbeat: qipState.heartbeat,
+      lessonCount: qipState.lessonCount,
+      confidenceMultiplier: qipState.confidenceMultiplier,
+      drawLift: qipState.drawLift,
+      rationale: qipState.rationale
+    }
   };
 }
 
@@ -1594,13 +1977,14 @@ async function buildSignalDay(dateKey = todayDateKey()) {
   const expertSignals = await Promise.all(
     preparedMatches.map(({ resolvedMatch, summary }) => fetchExpertMedia(resolvedMatch, summary, 10).catch(() => buildExpertSignal(resolvedMatch, [])))
   );
+  const qipState = await getQipState(dateKey).catch(() => null);
 
   const matches = preparedMatches.map(({ match, event, summary, homeProfile, awayProfile, resolvedMatch }, index) => {
     const gmt = gmtFromIso(summary?.date)
       || match.githubMatch?.gmt
       || gmtFromOpenFootball(match.date, match.openFootballCrossCheck?.time);
     const expertMedia = expertSignals[index];
-    const predictionModel = buildPredictionModel(resolvedMatch, homeProfile, awayProfile, summary, expertMedia);
+    const predictionModel = buildPredictionModel(resolvedMatch, homeProfile, awayProfile, summary, expertMedia, qipState);
     return {
       source: {
         schedule: "rezarahiminia/worldcup2026",
@@ -2195,6 +2579,14 @@ async function handleApi(req, res, url) {
       return;
     }
 
+    if (url.pathname === "/api/knockout") {
+      const dateKey = url.searchParams.get("date") || todayDateKey();
+      const mode = url.searchParams.get("mode") === "known" ? "known" : "signal";
+      const knockout = await buildKnockoutProjection(dateKey, mode);
+      jsonResponse(res, 200, knockout);
+      return;
+    }
+
     if (url.pathname === "/api/team-room") {
       const dateKey = url.searchParams.get("date") || todayDateKey();
       const teamName = url.searchParams.get("team");
@@ -2274,7 +2666,8 @@ async function handleApi(req, res, url) {
         fetchGoogleNews(`${match.home} ${match.away} World Cup 2026 prediction preview squad news`, 10).catch(() => []),
         findLiveMatchForTeams(dateKey, match.home, match.away).catch(() => null)
       ]);
-      const prediction = buildPredictionModel(match, homeProfile, awayProfile, summary, expertMedia);
+      const qipState = await getQipState(dateKey).catch(() => null);
+      const prediction = buildPredictionModel(match, homeProfile, awayProfile, summary, expertMedia, qipState);
       prediction.label = expertMedia?.noteCount >= 3
         ? "Signal Room high-likelihood matchup model"
         : "Signal Room neutral matchup model";
@@ -2338,7 +2731,8 @@ async function handleApi(req, res, url) {
       const homeProfile = squadStats(homeSquad);
       const awayProfile = squadStats(awaySquad);
       const expertMedia = await fetchExpertMedia(match, summary, 12).catch(() => match.expertMedia || buildExpertSignal(match, []));
-      const prediction = buildPredictionModel(match, homeProfile, awayProfile, summary, expertMedia);
+      const qipState = await getQipState(dateKey).catch(() => null);
+      const prediction = buildPredictionModel(match, homeProfile, awayProfile, summary, expertMedia, qipState);
       const news = await fetchGoogleNews(`${match.home} ${match.away} World Cup 2026 prediction preview odds`, 10).catch(() => []);
       const homeLineup = findLineup(summary, match.home);
       const awayLineup = findLineup(summary, match.away);

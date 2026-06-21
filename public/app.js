@@ -3,6 +3,9 @@ const state = {
   worldcup26: null,
   signalDay: null,
   signals: null,
+  knockout: null,
+  knockoutMode: "signal",
+  knockoutRequestId: 0,
   teamRoom: null,
   matchRoom: null,
   squads: null,
@@ -61,9 +64,15 @@ function selectedDateKey() {
   return inputDateToKey($("#matchDateInput")?.value);
 }
 
+function selectedKnockoutDateKey() {
+  return inputDateToKey($("#knockoutDateInput")?.value || $("#matchDateInput")?.value);
+}
+
 function setSelectedDate(key) {
   const input = $("#matchDateInput");
   if (input) input.value = keyToInputDate(key);
+  const knockoutInput = $("#knockoutDateInput");
+  if (knockoutInput && !knockoutInput.value) knockoutInput.value = keyToInputDate(key);
 }
 
 function refreshTimeLabel() {
@@ -393,77 +402,109 @@ function renderPlayersTable() {
   });
 }
 
-const KNOCKOUT_ROUNDS = [
-  ["r32", "Round of 32"],
-  ["r16", "Round of 16"],
-  ["qf", "Quarter-finals"],
-  ["sf", "Semi-finals"],
-  ["third", "Third Place"],
-  ["final", "Final"]
-];
-
-function repoLocalDateLabel(value) {
-  const match = String(value || "").match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{1,2}):(\d{2})/);
-  if (!match) return "TBD";
-  const [, month, day, year, hour, minute] = match;
-  return `${day} ${GMT_MONTHS[Number(month) - 1]}, ${hour.padStart(2, "0")}:${minute} venue`;
+function knockoutTeamSource(text) {
+  return text ? `<small>${escapeHtml(text)}</small>` : "";
 }
 
-function knockoutTimeLabel(game) {
-  return game.gmt?.label || repoLocalDateLabel(game.local_date);
+function knockoutPredictionMarkup(match) {
+  if (!match.prediction) return "";
+  const probabilities = match.prediction.probabilities || {};
+  return `
+    <div class="bracket-prediction">
+      <span>Signal pick</span>
+      <strong>${escapeHtml(match.prediction.favorite || "TBD")} ${escapeHtml(match.prediction.score || "")}</strong>
+      <small>${escapeHtml(match.prediction.confidence || 0)} pts · ${escapeHtml(probabilities.home || 0)} / ${escapeHtml(probabilities.draw || 0)} / ${escapeHtml(probabilities.away || 0)}</small>
+    </div>
+  `;
 }
 
-function knockoutTeamLabel(game, side) {
-  const name = side === "home" ? game.home_team_name_en : game.away_team_name_en;
-  const label = side === "home" ? game.home_team_label : game.away_team_label;
-  return name || label || "TBD";
+function roundConfidenceSummary(data) {
+  const grouped = new Map();
+  for (const item of data?.technical?.confidenceByRound || []) {
+    if (!grouped.has(item.round)) grouped.set(item.round, []);
+    grouped.get(item.round).push(Number(item.confidence || 0));
+  }
+  return [...grouped.entries()].map(([round, values]) => ({
+    round,
+    confidence: values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length),
+    matches: values.length
+  }));
 }
 
-function knockoutScore(game) {
-  const finished = game.finished === true || game.finished === "TRUE";
-  if (!finished) return "";
-  return `<span class="bracket-score">${escapeHtml(game.home_score ?? 0)}-${escapeHtml(game.away_score ?? 0)}</span>`;
+function renderKnockoutTech(data = state.knockout) {
+  const node = $("#knockoutTechChart");
+  if (!node) return;
+  const technical = data?.technical || {};
+  const rows = roundConfidenceSummary(data);
+  const max = Math.max(1, ...rows.map((row) => row.confidence));
+  node.innerHTML = `
+    <div class="tech-head">
+      <span>Technical projection</span>
+      <strong>${escapeHtml(technical.averageConfidence || 0)} pts avg confidence</strong>
+      <small>${escapeHtml(technical.resolvedSlots || 0)} resolved slots · ${escapeHtml(technical.projectedMatches || 0)} modeled matches</small>
+    </div>
+    <div class="tech-bars">
+      ${rows.length ? rows.map((row) => `
+        <div class="tech-row">
+          <span>${escapeHtml(row.round.toUpperCase())}</span>
+          <div><i style="width:${Math.max(6, (row.confidence / max) * 100)}%"></i></div>
+          <strong>${escapeHtml(row.confidence.toFixed(1))}</strong>
+        </div>
+      `).join("") : `<div class="empty">No projected knockout confidence is available in known-only mode.</div>`}
+    </div>
+  `;
 }
 
-function renderKnockout() {
+function renderKnockoutQip(data = state.knockout) {
+  const node = $("#knockoutQipBox");
+  if (!node) return;
+  const qip = data?.qip || {};
+  const rationale = qip.rationale || [];
+  node.innerHTML = `
+    <span>QIP Compounding Knowledge</span>
+    <strong>${escapeHtml(qip.lessonCount || 0)} lessons stored</strong>
+    <p>Confidence multiplier ${escapeHtml(qip.confidenceMultiplier || 1)} · draw correction ${escapeHtml(qip.drawLift || 0)} pts</p>
+    <div class="qip-heartbeat">${escapeHtml(qip.heartbeat || "Waiting for completed results before calibration.")}</div>
+    ${rationale.length ? `<ul>${rationale.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
+  `;
+}
+
+function renderKnockout(data = state.knockout) {
   const node = $("#knockoutBracket");
   if (!node) return;
-  const games = state.worldcup26?.games || [];
-  const byRound = Object.fromEntries(KNOCKOUT_ROUNDS.map(([type]) => [type, []]));
-  games
-    .filter((game) => game.type && game.type !== "group")
-    .forEach((game) => {
-      if (byRound[game.type]) byRound[game.type].push(game);
-    });
-
-  node.innerHTML = KNOCKOUT_ROUNDS.map(([type, label]) => {
-    const roundGames = [...(byRound[type] || [])].sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
-    return `
-      <section class="knockout-round ${escapeHtml(type)}">
-        <h3>${escapeHtml(label)}</h3>
-        <div class="bracket-stack">
-          ${roundGames.length ? roundGames.map((game) => `
-            <article class="bracket-card">
-              <div class="bracket-meta">
-                <span>Match ${escapeHtml(game.id || "")}</span>
-                <b>${escapeHtml(knockoutTimeLabel(game))}</b>
-              </div>
-              <div class="bracket-team">
-                <span>${escapeHtml(knockoutTeamLabel(game, "home"))}</span>
-                ${game.home_team_code ? `<em>${escapeHtml(game.home_team_code)}</em>` : ""}
-              </div>
-              <div class="bracket-team">
-                <span>${escapeHtml(knockoutTeamLabel(game, "away"))}</span>
-                ${game.away_team_code ? `<em>${escapeHtml(game.away_team_code)}</em>` : ""}
-              </div>
-              ${knockoutScore(game)}
-              <small>${escapeHtml(game.stadium_name || "")}${game.city_en ? ` · ${escapeHtml(game.city_en)}` : ""}</small>
-            </article>
-          `).join("") : `<div class="empty">No fixtures mapped for this round yet.</div>`}
-        </div>
-      </section>
-    `;
-  }).join("");
+  if (!data?.rounds?.length) {
+    node.innerHTML = `<div class="empty">Knockout projection loading.</div>`;
+    renderKnockoutTech(data);
+    renderKnockoutQip(data);
+    return;
+  }
+  node.innerHTML = data.rounds.map((round) => `
+    <section class="knockout-round ${escapeHtml(round.type)}">
+      <h3>${escapeHtml(round.label)}</h3>
+      <div class="bracket-stack">
+        ${round.matches.length ? round.matches.map((match) => `
+          <article class="bracket-card ${match.winner ? "projected" : ""}">
+            <div class="bracket-meta">
+              <span>Match ${escapeHtml(match.id || "")}</span>
+              <b>${escapeHtml(signalTime(match))}</b>
+            </div>
+            <div class="bracket-team ${match.winner && match.winner === match.home ? "winner" : ""}">
+              <span>${escapeHtml(match.home || "TBD")}</span>
+              ${knockoutTeamSource(match.homeSource)}
+            </div>
+            <div class="bracket-team ${match.winner && match.winner === match.away ? "winner" : ""}">
+              <span>${escapeHtml(match.away || "TBD")}</span>
+              ${knockoutTeamSource(match.awaySource)}
+            </div>
+            ${knockoutPredictionMarkup(match)}
+            <small>${escapeHtml(match.stadium || "")}${match.city ? ` · ${escapeHtml(match.city)}` : ""}</small>
+          </article>
+        `).join("") : `<div class="empty">No fixtures mapped for this round yet.</div>`}
+      </div>
+    </section>
+  `).join("");
+  renderKnockoutTech(data);
+  renderKnockoutQip(data);
 }
 
 function percentLabel(value) {
@@ -1301,7 +1342,6 @@ async function loadWorldcup26(options = {}) {
   state.worldcup26 = await getJson("/api/worldcup26", options);
   renderMetrics();
   renderFixtures();
-  renderKnockout();
   renderSourceTicker();
 }
 
@@ -1323,6 +1363,17 @@ async function loadSignalDay(options = {}) {
 async function loadSignals(options = {}) {
   state.signals = await getJson(`/api/signals?date=${selectedDateKey()}`, options);
   renderSignals(state.signals);
+}
+
+async function loadKnockout(options = {}) {
+  const requestId = state.knockoutRequestId + 1;
+  state.knockoutRequestId = requestId;
+  const mode = state.knockoutMode;
+  const dateKey = selectedKnockoutDateKey();
+  const result = await getJson(`/api/knockout?date=${dateKey}&mode=${mode}`, options);
+  if (requestId !== state.knockoutRequestId || mode !== state.knockoutMode || dateKey !== selectedKnockoutDateKey()) return;
+  state.knockout = result;
+  renderKnockout(state.knockout);
 }
 
 async function loadTeamRoom(options = {}) {
@@ -1414,7 +1465,8 @@ async function refreshAll(options = {}) {
       loadWorldcup26(requestOptions),
       loadSquads({ ...requestOptions, selection }),
       loadSignalDay({ ...requestOptions, selection }),
-      loadSignals(requestOptions)
+      loadSignals(requestOptions),
+      loadKnockout(requestOptions)
     ]);
     await Promise.all([
       loadTeamRoom(requestOptions),
@@ -1465,7 +1517,19 @@ function bindEvents() {
     switchView("match-room");
   });
   $("#refreshButton").addEventListener("click", () => refreshAll({ force: true, today: true }));
-  $("#matchDateInput").addEventListener("change", () => refreshAll({ force: true }));
+  $("#matchDateInput").addEventListener("change", () => {
+    const knockoutInput = $("#knockoutDateInput");
+    if (knockoutInput) knockoutInput.value = $("#matchDateInput").value;
+    refreshAll({ force: true });
+  });
+  $("#knockoutDateInput")?.addEventListener("change", () => loadKnockout({ refreshToken: String(Date.now()) }));
+  $$("[data-knockout-mode]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.knockoutMode = button.dataset.knockoutMode || "signal";
+      $$("[data-knockout-mode]").forEach((item) => item.classList.toggle("active", item === button));
+      loadKnockout({ refreshToken: String(Date.now()) });
+    });
+  });
   $$(".players-table th[data-sort]").forEach((header) => {
     header.addEventListener("click", () => {
       const key = header.dataset.sort;

@@ -19,7 +19,7 @@
           <div>
             <p class="eyebrow">FIFA World Cup 2026</p>
             <h1><span>Signal</span> <span>Room</span></h1>
-            <p class="brand-subtitle">Match intelligence, squad signals, live tournament model</p>
+            <p class="brand-subtitle">Live Match Intelligence Model</p>
           </div>
         </div>
         <div class="top-actions" aria-label="Dashboard controls">
@@ -431,8 +431,22 @@
             <div class="panel-header">
               <div>
                 <h2>Knockout</h2>
-                <p>Round of 32 to final, GMT schedule</p>
+                <p>Known bracket and Signal Room projection</p>
               </div>
+              <div class="knockout-controls">
+                <div class="date-field compact">
+                  <label for="knockoutDateInput">Projection Date</label>
+                  <input id="knockoutDateInput" type="date" aria-label="Knockout projection date">
+                </div>
+                <div class="mode-switch" aria-label="Knockout mode">
+                  <button class="active" data-knockout-mode="signal" type="button">Signal</button>
+                  <button data-knockout-mode="known" type="button">Known</button>
+                </div>
+              </div>
+            </div>
+            <div class="knockout-intel">
+              <div id="knockoutTechChart" class="knockout-tech"></div>
+              <div id="knockoutQipBox" class="qip-box"></div>
             </div>
             <div class="knockout-scroll" id="knockoutBracket"></div>
           </section>
