@@ -1139,11 +1139,12 @@ function liveScoreMarkup(liveScore, compact = false, context = {}) {
   const value = score.available ? `${score.homeScore ?? 0}-${score.awayScore ?? 0}` : "No live fixture";
   const teams = score.available && !compact ? `<small>${escapeHtml(score.home || "")} vs ${escapeHtml(score.away || "")}</small>` : "";
   const detail = scoreStateLabel(score, context);
+  const showDetail = !/^kickoff/i.test(detail);
   return `
     <div class="live-score ${mode}">
       <span>${escapeHtml(label)}</span>
       <strong>${escapeHtml(value)}</strong>
-      <em>${escapeHtml(detail)}</em>
+      ${showDetail ? `<em>${escapeHtml(detail)}</em>` : ""}
       ${teams}
     </div>
   `;
