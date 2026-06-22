@@ -15,15 +15,30 @@ const state = {
   playerSort: { key: "goals", direction: "desc" },
   competitions: [],
   matches: [],
-  activeMatch: null
+  activeMatch: null,
+  timeZone: localStorage.getItem("signalRoomTimeZone") || "gmt2"
 };
 
 const API_BASE = window.location.protocol === "file:" ? "http://localhost:4173" : "";
 const GMT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const DISPLAY_TIME_OFFSET_MINUTES = 120;
-const DISPLAY_TIME_LABEL = "GMT+2";
+const TIME_ZONE_OPTIONS = {
+  gmt2: { label: "GMT+2", offsetMinutes: 120 },
+  edt: { label: "EDT", timeZone: "America/New_York" }
+};
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
+
+function activeTimeZone() {
+  return TIME_ZONE_OPTIONS[state.timeZone] ? state.timeZone : "gmt2";
+}
+
+function activeTimeZoneConfig() {
+  return TIME_ZONE_OPTIONS[activeTimeZone()];
+}
+
+function activeTimeZoneLabel() {
+  return activeTimeZoneConfig().label;
+}
 
 function setStatus(text, mode = "") {
   const node = $("#refreshStatus");
@@ -49,8 +64,41 @@ function withRefresh(url, refreshToken) {
   return `${url}${separator}refresh=${encodeURIComponent(refreshToken)}`;
 }
 
+function timePartsInActiveZone(date) {
+  const parsed = date instanceof Date ? date : new Date(date);
+  const zone = activeTimeZoneConfig();
+  if (Number.isNaN(parsed.getTime())) return null;
+  if (zone.offsetMinutes !== undefined) {
+    const shifted = new Date(parsed.getTime() + zone.offsetMinutes * 60 * 1000);
+    return {
+      year: shifted.getUTCFullYear(),
+      month: shifted.getUTCMonth() + 1,
+      day: shifted.getUTCDate(),
+      hour: shifted.getUTCHours(),
+      minute: shifted.getUTCMinutes()
+    };
+  }
+  const values = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+    timeZone: zone.timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).formatToParts(parsed).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+  return {
+    year: Number(values.year),
+    month: Number(values.month),
+    day: Number(values.day),
+    hour: Number(values.hour) % 24,
+    minute: Number(values.minute)
+  };
+}
+
 function todayDateKey() {
-  return applyDisplayTimeOffset(new Date()).toISOString().slice(0, 10).replaceAll("-", "");
+  const parts = timePartsInActiveZone(new Date());
+  return `${parts.year}${String(parts.month).padStart(2, "0")}${String(parts.day).padStart(2, "0")}`;
 }
 
 function inputDateToKey(value) {
@@ -61,6 +109,10 @@ function keyToInputDate(value) {
   const key = String(value || todayDateKey());
   if (!/^\d{8}$/.test(key)) return keyToInputDate(todayDateKey());
   return `${key.slice(0, 4)}-${key.slice(4, 6)}-${key.slice(6, 8)}`;
+}
+
+function dashedDateFromKey(value) {
+  return keyToInputDate(value);
 }
 
 function selectedDateKey() {
@@ -79,17 +131,8 @@ function setSelectedDate(key) {
 }
 
 function refreshTimeLabel() {
-  const now = new Date();
-  const displayTime = applyDisplayTimeOffset(now);
-  const displayHour = String(displayTime.getUTCHours()).padStart(2, "0");
-  const displayMinute = String(displayTime.getUTCMinutes()).padStart(2, "0");
-  const edtTime = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  }).format(now);
-  return `Live ${displayHour}:${displayMinute} ${DISPLAY_TIME_LABEL} · ${edtTime} EDT`;
+  const parts = timePartsInActiveZone(new Date());
+  return `Live ${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")} ${activeTimeZoneLabel()}`;
 }
 
 function escapeHtml(value) {
@@ -117,28 +160,84 @@ function formatDate(value) {
   }).format(parsed);
 }
 
-function applyDisplayTimeOffset(date) {
-  return new Date(date.getTime() + DISPLAY_TIME_OFFSET_MINUTES * 60 * 1000);
-}
-
 function formatGMT(value) {
-  if (!value) return `TBD ${DISPLAY_TIME_LABEL}`;
+  if (!value) return `TBD ${activeTimeZoneLabel()}`;
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return `TBD ${DISPLAY_TIME_LABEL}`;
-  const displayTime = applyDisplayTimeOffset(date);
-  const day = String(displayTime.getUTCDate()).padStart(2, "0");
-  const hour = String(displayTime.getUTCHours()).padStart(2, "0");
-  const minute = String(displayTime.getUTCMinutes()).padStart(2, "0");
-  return `${day} ${GMT_MONTHS[displayTime.getUTCMonth()]}, ${hour}:${minute} ${DISPLAY_TIME_LABEL}`;
+  const parts = timePartsInActiveZone(date);
+  if (!parts) return `TBD ${activeTimeZoneLabel()}`;
+  const day = String(parts.day).padStart(2, "0");
+  const hour = String(parts.hour).padStart(2, "0");
+  const minute = String(parts.minute).padStart(2, "0");
+  return `${day} ${GMT_MONTHS[parts.month - 1]}, ${hour}:${minute} ${activeTimeZoneLabel()}`;
 }
 
 function gmtObjectLabel(gmt) {
   if (gmt?.iso) return formatGMT(gmt.iso);
-  return gmt?.label || "";
+  return activeTimeZone() === "gmt2" ? gmt?.label || "" : "";
 }
 
 function matchGmtLabel(match) {
-  return gmtObjectLabel(match?.gmt) || (match?.summary?.date ? formatGMT(match.summary.date) : `TBD ${DISPLAY_TIME_LABEL}`);
+  return gmtObjectLabel(match?.gmt) || (match?.summary?.date ? formatGMT(match.summary.date) : `TBD ${activeTimeZoneLabel()}`);
+}
+
+function dateKeyFromGame(game) {
+  const value = String(game?.local_date || "");
+  const match = value.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  if (match) return `${match[3]}${match[1]}${match[2]}`;
+  if (game?.gmt?.iso) return game.gmt.iso.slice(0, 10).replaceAll("-", "");
+  return selectedDateKey();
+}
+
+function isFinalFixture(item) {
+  return item?.finished === true || item?.finished === "TRUE" || item?.liveScore?.isFinal || item?.summary?.archivedResult;
+}
+
+function countdownLabel(item) {
+  if (isFinalFixture(item)) return "Final";
+  if (item?.liveScore?.isLive) return "Live now";
+  const iso = item?.gmt?.iso || item?.summary?.date;
+  if (!iso) return "Kickoff TBA";
+  const kickoff = new Date(iso);
+  if (Number.isNaN(kickoff.getTime())) return "Kickoff TBA";
+  const diffMs = kickoff.getTime() - Date.now();
+  const absMinutes = Math.max(0, Math.round(Math.abs(diffMs) / 60000));
+  const days = Math.floor(absMinutes / 1440);
+  const hours = Math.floor((absMinutes % 1440) / 60);
+  const minutes = absMinutes % 60;
+  const compact = days > 0
+    ? `${days}d ${hours}h`
+    : hours > 0
+      ? `${hours}h ${minutes}m`
+      : `${minutes}m`;
+  if (diffMs > 0) return `Kickoff in ${compact}`;
+  if (absMinutes <= 130) return "Live window";
+  return `Kickoff passed ${compact}`;
+}
+
+function fixtureStatus(game) {
+  if (isFinalFixture(game)) {
+    return {
+      label: "Final",
+      detail: game.result_source || game.liveScore?.detail || "Result confirmed",
+      className: "final"
+    };
+  }
+  const raw = String(game?.time_elapsed || "").trim();
+  const rawKey = raw.toLowerCase();
+  if (raw && rawKey !== "notstarted" && rawKey !== "scheduled") {
+    return {
+      label: /final|full/i.test(raw) ? "Final" : "Live",
+      detail: raw,
+      className: /final|full/i.test(raw) ? "final" : "live"
+    };
+  }
+  const iso = game?.gmt?.iso;
+  if (!iso) return { label: "Scheduled", detail: "Kickoff TBA", className: "scheduled" };
+  const kickoff = new Date(iso);
+  const diffMs = kickoff.getTime() - Date.now();
+  if (diffMs > 0) return { label: "Scheduled", detail: countdownLabel(game), className: "scheduled" };
+  if (Math.abs(diffMs) <= 130 * 60000) return { label: "Live feed pending", detail: "Kickoff window active", className: "live" };
+  return { label: "Result pending", detail: "No final feed connected yet", className: "pending" };
 }
 
 function matchSignature(match) {
@@ -155,6 +254,7 @@ function captureSelection() {
   return {
     favoriteTeam: favoriteSelect?.value || state.teamRoom?.team || "",
     matchValue: matchOption?.value || state.matchRoom?.match?.eventId || "",
+    matchId: matchOption?.dataset?.matchId || state.matchRoom?.match?.matchId || "",
     matchSignature: matchOption?.dataset?.signature || matchSignature(state.matchRoom?.match),
     teamRoomTeam: $("#teamRoomSelect")?.value || state.teamRoom?.team || "",
     matchupHome: $("#matchupHomeSelect")?.value || state.matchupLab?.match?.home || "",
@@ -162,10 +262,11 @@ function captureSelection() {
   };
 }
 
-function selectPreferredOption(select, preferredValue, preferredSignature = "") {
+function selectPreferredOption(select, preferredValue, preferredSignature = "", preferredMatchId = "") {
   const options = [...select.options];
   const exactValueIsStable = preferredValue && !String(preferredValue).startsWith("index-");
   const target = (exactValueIsStable ? options.find((option) => option.value === preferredValue) : null)
+    || options.find((option) => preferredMatchId && option.dataset.matchId === String(preferredMatchId))
     || options.find((option) => preferredSignature && option.dataset.signature === preferredSignature)
     || options.find((option) => option.value === preferredValue);
   if (target) {
@@ -220,6 +321,35 @@ function renderSourceTicker() {
   ticker.textContent = `${connected} connected feeds · ${fixtureCount} GitHub fixtures · ${daySources} signal sources · ${locked} credential gates${bdlText}`;
 }
 
+function renderTimeZoneSwitch() {
+  $$("[data-time-zone]").forEach((button) => {
+    const active = button.dataset.timeZone === activeTimeZone();
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+}
+
+function rerenderTimeSensitiveViews() {
+  const selection = captureSelection();
+  renderTimeZoneSwitch();
+  renderControls(selection);
+  renderFixtures();
+  renderTodayMatches();
+  if (state.signals) renderSignals(state.signals);
+  if (state.knockout) renderKnockout(state.knockout);
+  if (state.teamRoom) renderTeamRoom(state.teamRoom);
+  if (state.matchRoom) renderMatchRoom(state.matchRoom);
+  if (state.matchupLab) renderMatchupLab(state.matchupLab);
+  if (!$("#refreshButton")?.disabled) setStatus(refreshTimeLabel());
+}
+
+function setTimeZone(value) {
+  if (!TIME_ZONE_OPTIONS[value] || value === activeTimeZone()) return;
+  state.timeZone = value;
+  localStorage.setItem("signalRoomTimeZone", value);
+  rerenderTimeSensitiveViews();
+}
+
 function renderControls(selection = {}) {
   const teams = state.signalDay?.teams || [];
   const matches = state.signalDay?.matches || [];
@@ -236,13 +366,14 @@ function renderControls(selection = {}) {
 
   matchSelect.replaceChildren(...matches.map((match, index) => {
     const option = document.createElement("option");
-    option.value = match.eventId || `index-${index}`;
+    option.value = match.eventId || (match.matchId ? `match-${match.matchId}` : `index-${index}`);
     option.dataset.index = index;
+    option.dataset.matchId = match.matchId || "";
     option.dataset.signature = matchSignature(match);
     option.textContent = `${match.home} vs ${match.away} · ${matchGmtLabel(match)}`;
     return option;
   }));
-  selectPreferredOption(matchSelect, selection.matchValue, selection.matchSignature);
+  selectPreferredOption(matchSelect, selection.matchValue, selection.matchSignature, selection.matchId);
 }
 
 function renderFixtures() {
@@ -264,19 +395,31 @@ function renderFixtures() {
 
   rows.replaceChildren(...filtered.slice(0, 120).map((game) => {
     const tr = document.createElement("tr");
+    tr.className = "fixture-row";
+    tr.tabIndex = 0;
+    tr.dataset.matchId = game.id || "";
+    tr.setAttribute("role", "button");
+    tr.setAttribute("aria-label", `Open ${game.home_team_name_en || "home"} vs ${game.away_team_name_en || "away"} in Match Room`);
     const home = game.home_team_name_en || `Team ${game.home_team_id || ""}`.trim();
     const away = game.away_team_name_en || `Team ${game.away_team_id || ""}`.trim();
-    const status = game.finished === "TRUE" || game.finished === true ? "Final" : game.time_elapsed || "Scheduled";
-    const resultSource = game.result_source ? `<br><small>${escapeHtml(game.result_source)}</small>` : "";
-    const score = game.home_score !== null && game.away_score !== null && game.home_score !== undefined
-      ? `<span class="score">${escapeHtml(game.home_score)}-${escapeHtml(game.away_score)}</span>`
-      : "";
+    const status = fixtureStatus(game);
+    const hasScore = isFinalFixture(game) || status.className === "live" || Number(game.home_score || 0) || Number(game.away_score || 0);
+    const score = hasScore
+      ? `<span class="score">${escapeHtml(game.home_score ?? 0)}-${escapeHtml(game.away_score ?? 0)}</span>`
+      : `<span class="vs-pill">vs</span>`;
     tr.innerHTML = `
-      <td>${escapeHtml(gmtObjectLabel(game.gmt) || `TBD ${DISPLAY_TIME_LABEL}`)}</td>
+      <td>${escapeHtml(gmtObjectLabel(game.gmt) || `TBD ${activeTimeZoneLabel()}`)}<br><small class="fixture-countdown">${escapeHtml(countdownLabel(game))}</small></td>
       <td class="match-cell">${escapeHtml(home)} ${score} ${escapeHtml(away)}<br><small>${escapeHtml(game.stadium_name || "")}</small></td>
       <td>${escapeHtml(game.group || game.type || "Group")}</td>
-      <td>${escapeHtml(status)}${resultSource}</td>
+      <td><span class="fixture-status-pill ${escapeHtml(status.className)}">${escapeHtml(status.label)}</span><br><small>${escapeHtml(status.detail)}</small></td>
     `;
+    tr.addEventListener("click", () => openFixtureMatch(game));
+    tr.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openFixtureMatch(game);
+      }
+    });
     return tr;
   }));
 
@@ -287,6 +430,27 @@ function renderFixtures() {
   }
 }
 
+async function openFixtureMatch(game) {
+  const dateKey = dateKeyFromGame(game);
+  setSelectedDate(dateKey);
+  await loadSignalDay({
+    selection: {
+      ...captureSelection(),
+      matchId: String(game.id || ""),
+      matchSignature: matchSignature({
+        home: game.home_team_name_en,
+        away: game.away_team_name_en,
+        localDate: dashedDateFromKey(dateKey)
+      })
+    }
+  });
+  const select = $("#todayMatchSelect");
+  const target = [...select.options].find((option) => option.dataset.matchId === String(game.id || ""));
+  if (target) select.value = target.value;
+  await loadMatchRoom();
+  switchView("match-room");
+}
+
 function renderTodayMatches() {
   const grid = $("#todayMatchGrid");
   const matches = state.signalDay?.matches || [];
@@ -295,6 +459,7 @@ function renderTodayMatches() {
     card.className = "today-card";
     card.type = "button";
     card.dataset.eventId = match.eventId || "";
+    card.dataset.matchId = match.matchId || "";
     const prediction = match.predictionModel;
     const odds = match.summary?.odds;
     const expert = prediction?.components?.expertMedia || match.expertMedia;
@@ -306,6 +471,7 @@ function renderTodayMatches() {
       <div class="today-card-top">
         <span>${escapeHtml(match.group ? `Group ${match.group}` : "Match")}</span>
         <strong>${escapeHtml(matchGmtLabel(match))}</strong>
+        <small class="today-countdown">${escapeHtml(countdownLabel(match))}</small>
       </div>
       ${liveScoreMarkup(match.liveScore, true)}
       <div class="team-line">
@@ -1490,8 +1656,12 @@ async function loadTeamRoom(options = {}) {
 
 async function loadMatchRoom(options = {}) {
   const selected = $("#todayMatchSelect").selectedOptions[0];
-  const eventId = selected?.value?.startsWith("index-") ? "" : selected?.value || "";
-  state.matchRoom = await getJson(`/api/match-room?date=${selectedDateKey()}${eventId ? `&eventId=${encodeURIComponent(eventId)}` : ""}`, options);
+  const eventId = selected?.value?.startsWith("index-") || selected?.value?.startsWith("match-") ? "" : selected?.value || "";
+  const matchId = selected?.dataset?.matchId || "";
+  const params = new URLSearchParams({ date: selectedDateKey() });
+  if (eventId) params.set("eventId", eventId);
+  if (matchId) params.set("matchId", matchId);
+  state.matchRoom = await getJson(`/api/match-room?${params.toString()}`, options);
   renderMatchRoom(state.matchRoom);
 }
 
@@ -1597,9 +1767,25 @@ function initializeDateControl() {
   setSelectedDate(todayDateKey());
 }
 
+function initializeTimeZoneControl() {
+  if (!TIME_ZONE_OPTIONS[state.timeZone]) state.timeZone = "gmt2";
+  renderTimeZoneSwitch();
+}
+
+function tickLiveTime() {
+  renderFixtures();
+  renderTodayMatches();
+  if (!$("#refreshButton")?.disabled && $("#refreshStatus")?.dataset.mode !== "error") {
+    setStatus(refreshTimeLabel());
+  }
+}
+
 function bindEvents() {
   $$(".tab").forEach((tab) => {
     tab.addEventListener("click", () => switchView(tab.dataset.view));
+  });
+  $$("[data-time-zone]").forEach((button) => {
+    button.addEventListener("click", () => setTimeZone(button.dataset.timeZone));
   });
   $("#fixtureSearch").addEventListener("input", renderFixtures);
   $("#matchupHomeSelect").addEventListener("change", loadMatchupLab);
@@ -1648,6 +1834,8 @@ function bindEvents() {
   });
 }
 
+initializeTimeZoneControl();
 initializeDateControl();
 bindEvents();
 refreshAll();
+setInterval(tickLiveTime, 60000);

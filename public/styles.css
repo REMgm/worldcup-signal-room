@@ -262,14 +262,14 @@ h3 {
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: minmax(250px, 320px) 58px minmax(240px, 310px);
+  grid-template-columns: minmax(250px, 320px) minmax(132px, 152px) 58px minmax(240px, 310px);
   align-items: end;
   gap: 10px;
   align-self: center;
   margin-left: auto;
   padding: 22px 28px 22px 0;
   justify-content: flex-end;
-  flex: 0 0 min(720px, 55vw);
+  flex: 0 0 min(880px, 62vw);
 }
 
 .date-field {
@@ -294,6 +294,33 @@ h3 {
   background: #11140f;
   color: var(--text);
   font-size: 1.18rem;
+}
+
+.timezone-switch {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: rgba(11, 13, 10, 0.7);
+}
+
+.timezone-switch button {
+  border: 0;
+  border-right: 1px solid var(--line-soft);
+  background: transparent;
+  color: var(--muted);
+  font-weight: 900;
+}
+
+.timezone-switch button:last-child {
+  border-right: 0;
+}
+
+.timezone-switch button.active {
+  background: var(--away);
+  color: #11140f;
 }
 
 .icon-button:hover,
@@ -878,6 +905,15 @@ tbody tr:hover {
   background: rgba(31, 193, 107, 0.07);
 }
 
+.fixture-row {
+  cursor: pointer;
+}
+
+.fixture-row:focus-visible {
+  outline: 2px solid var(--home);
+  outline-offset: -2px;
+}
+
 th[data-sort] {
   cursor: pointer;
   user-select: none;
@@ -919,6 +955,50 @@ th[data-active="asc"]::after {
   color: #11140f;
   background: var(--away);
   font-weight: 900;
+}
+
+.vs-pill,
+.fixture-status-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 0 9px;
+  font-weight: 900;
+}
+
+.vs-pill {
+  margin: 0 8px;
+  color: var(--muted);
+  border: 1px solid var(--line-soft);
+}
+
+.fixture-status-pill {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.fixture-status-pill.final {
+  color: #11140f;
+  background: var(--pitch);
+}
+
+.fixture-status-pill.live {
+  color: #11140f;
+  background: var(--red);
+}
+
+.fixture-status-pill.pending {
+  color: #11140f;
+  background: var(--away);
+}
+
+.fixture-countdown,
+.today-countdown {
+  color: var(--home);
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
 }
 
 .today-grid {
@@ -977,6 +1057,14 @@ th[data-active="asc"]::after {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.today-card-top {
+  flex-wrap: wrap;
+}
+
+.today-countdown {
+  flex: 0 0 100%;
 }
 
 .today-card-top span,
@@ -2158,6 +2246,9 @@ th[data-active="asc"]::after {
   color: var(--text);
   font-size: clamp(1rem, 2vw, 1.35rem);
   line-height: 1.05;
+  overflow-wrap: normal;
+  word-break: normal;
+  hyphens: none;
 }
 
 .score-prediction small {
@@ -2662,7 +2753,7 @@ th[data-active="asc"]::after {
   }
 
   .top-actions {
-    grid-template-columns: minmax(0, 1fr) 58px minmax(230px, 300px);
+    grid-template-columns: minmax(0, 1fr) minmax(132px, 152px) 58px minmax(230px, 300px);
     align-items: end;
     justify-content: flex-start;
     padding: 0 18px 18px;
@@ -2750,12 +2841,28 @@ th[data-active="asc"]::after {
     align-items: end;
   }
 
+  .top-actions .date-field {
+    grid-column: 1 / 2;
+    grid-row: 1;
+  }
+
+  .top-actions .icon-button {
+    grid-column: 2 / 3;
+    grid-row: 1;
+  }
+
+  .timezone-switch {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
   .api-football-summary {
     grid-template-columns: 1fr;
   }
 
   .status-chip {
     grid-column: 1 / -1;
+    grid-row: 3;
     white-space: normal;
   }
 

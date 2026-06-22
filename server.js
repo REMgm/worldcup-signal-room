@@ -2408,6 +2408,7 @@ async function buildSignalDay(dateKey = todayDateKey()) {
         expertMedia: expertMedia.noteCount ? "Google News RSS + ESPN news" : "not enough media notes"
       },
       eventId: event?.id || summary?.eventId || null,
+      matchId: match.githubMatch?.id || null,
       group: match.group || null,
       localDate: match.date || localDate,
       localTime: match.time || "",
@@ -3360,8 +3361,12 @@ async function handleApi(req, res, url) {
     if (url.pathname === "/api/match-room") {
       const dateKey = normalizeDateKey(url.searchParams.get("date"));
       const eventId = url.searchParams.get("eventId");
+      const matchId = url.searchParams.get("matchId");
       const [day, squads] = await Promise.all([buildSignalDay(dateKey), getSquads()]);
-      const match = day.matches.find((item) => item.eventId === eventId) || day.matches[0] || null;
+      const match = day.matches.find((item) => matchId && String(item.matchId || "") === String(matchId))
+        || day.matches.find((item) => eventId && item.eventId === eventId)
+        || day.matches[0]
+        || null;
       if (!match) {
         jsonResponse(res, 404, { error: "No match found" });
         return;
