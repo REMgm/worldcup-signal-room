@@ -221,6 +221,28 @@ function countdownLabel(item) {
   return `Kickoff passed ${compact}`;
 }
 
+function scoreStateLabel(score = {}, context = {}) {
+  const statusText = [
+    score.status,
+    score.detail,
+    context?.summary?.status,
+    context?.summary?.statusDetail,
+    context?.summary?.statusState
+  ].filter(Boolean).join(" ");
+  if (/final|full time|\bft\b|post/i.test(statusText)) return "Match finished";
+  if (/live|in progress|halftime|half time|\bin\b/i.test(statusText)) return "Match live";
+  if (score.isFinal || isFinalFixture(context)) return "Match finished";
+  if (score.isLive || context?.liveScore?.isLive) return "Match live";
+  const iso = context?.gmt?.iso || context?.summary?.date || score.date;
+  if (!iso) return "Kickoff TBA";
+  const kickoff = new Date(iso);
+  if (Number.isNaN(kickoff.getTime())) return "Kickoff TBA";
+  const diffMs = kickoff.getTime() - Date.now();
+  if (diffMs > 0) return countdownLabel(context || { gmt: { iso } });
+  if (Math.abs(diffMs) <= 130 * 60000) return "Match live";
+  return "Match finished";
+}
+
 function fixtureStatus(game) {
   if (isFinalFixture(game)) {
     return {
@@ -284,10 +306,50 @@ function selectPreferredOption(select, preferredValue, preferredSignature = "", 
 }
 
 function switchView(id) {
-  $$(".tab").forEach((item) => item.classList.toggle("active", item.dataset.view === id));
+  $$(".tab").forEach((item) => {
+    const active = item.dataset.view === id;
+    item.classList.toggle("active", active);
+    if (active) {
+      item.setAttribute("aria-current", "page");
+    } else {
+      item.removeAttribute("aria-current");
+    }
+  });
   $$(".view").forEach((view) => view.classList.toggle("active", view.id === id));
-  $(`.tab[data-view="${id}"]`)?.scrollIntoView({ block: "nearest", inline: "center" });
+  closeMobileMenu();
+  if (window.matchMedia("(min-width: 761px)").matches) {
+    $(`.tab[data-view="${id}"]`)?.scrollIntoView({ block: "nearest", inline: "center" });
+  }
   window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function closeMobileMenu() {
+  const nav = $(".nav-row");
+  const toggle = $("#mobileMenuButton");
+  if (!nav || !toggle) return;
+  nav.classList.remove("open");
+  toggle.setAttribute("aria-expanded", "false");
+  toggle.setAttribute("aria-label", "Open dashboard menu");
+}
+
+function toggleMobileMenu() {
+  const nav = $(".nav-row");
+  const toggle = $("#mobileMenuButton");
+  if (!nav || !toggle) return;
+  const open = !nav.classList.contains("open");
+  nav.classList.toggle("open", open);
+  toggle.setAttribute("aria-expanded", open ? "true" : "false");
+  toggle.setAttribute("aria-label", open ? "Close dashboard menu" : "Open dashboard menu");
+}
+
+function initializeActiveTabState() {
+  $$(".tab").forEach((item) => {
+    if (item.classList.contains("active")) {
+      item.setAttribute("aria-current", "page");
+    } else {
+      item.removeAttribute("aria-current");
+    }
+  });
 }
 
 function renderMetrics() {
@@ -481,7 +543,7 @@ function renderTodayMatches() {
         <strong>${escapeHtml(matchGmtLabel(match))}</strong>
         <small class="today-countdown">${escapeHtml(countdownLabel(match))}</small>
       </div>
-      ${liveScoreMarkup(match.liveScore, true)}
+      ${liveScoreMarkup(match.liveScore, true, match)}
       <div class="team-line">
         ${match.summary?.home?.logo ? `<img src="${escapeHtml(match.summary.home.logo)}" alt="">` : ""}
         <b>${escapeHtml(match.home)}</b>
@@ -496,9 +558,8 @@ function renderTodayMatches() {
         <i style="width:${awayProb || 50}%"></i>
       </div>
       <div class="today-prediction">
-        <span>Prediction</span>
+        <span>Prediction Experiment</span>
         <strong>${escapeHtml(projectedScore?.label || "Prediction pending")}</strong>
-        <em>Experiment by QIP AI Learning Protocol</em>
         <small>${escapeHtml(match.home)} ${escapeHtml(homeProb || 0)}% · Draw ${escapeHtml(drawProb || 0)}% · ${escapeHtml(match.away)} ${escapeHtml(awayProb || 0)}%</small>
       </div>
       <div class="today-card-meta">${prediction ? `Favorite: ${escapeHtml(prediction.favorite)} · ${escapeHtml(prediction.confidence)} confidence` : "Prediction data pending"}</div>
@@ -1071,17 +1132,18 @@ function statCard(label, value, note = "") {
   return `<div class="stat"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong>${note ? `<em>${escapeHtml(note)}</em>` : ""}</div>`;
 }
 
-function liveScoreMarkup(liveScore, compact = false) {
+function liveScoreMarkup(liveScore, compact = false, context = {}) {
   const score = liveScore || {};
   const mode = score.isLive ? "live" : score.isFinal ? "final" : score.available ? "scheduled" : "empty";
   const label = score.isLive ? "Live Score" : score.isFinal ? "Final Score" : score.available ? "Real-time Score" : "Real-time Score";
   const value = score.available ? `${score.homeScore ?? 0}-${score.awayScore ?? 0}` : "No live fixture";
   const teams = score.available && !compact ? `<small>${escapeHtml(score.home || "")} vs ${escapeHtml(score.away || "")}</small>` : "";
+  const detail = scoreStateLabel(score, context);
   return `
     <div class="live-score ${mode}">
       <span>${escapeHtml(label)}</span>
       <strong>${escapeHtml(value)}</strong>
-      <em>${escapeHtml(score.detail || score.status || "No ESPN event mapped")}</em>
+      <em>${escapeHtml(detail)}</em>
       ${teams}
     </div>
   `;
@@ -1393,7 +1455,7 @@ function renderTeamRoom(data) {
     <div class="hero-score">
       <span>Today</span>
       <strong>${match ? `${escapeHtml(match.home)} vs ${escapeHtml(match.away)}` : "No match today"}</strong>
-      ${match ? liveScoreMarkup(match.liveScore, true) : ""}
+      ${match ? liveScoreMarkup(match.liveScore, true, match) : ""}
       <small>${escapeHtml(match ? matchGmtLabel(match) : "")} · ${escapeHtml(match?.summary?.venue || "")}</small>
     </div>
   `;
@@ -1511,12 +1573,11 @@ function renderMatchRoom(data) {
     <div class="match-center">
       <p class="eyebrow">Match Deep Dive</p>
       <strong>${escapeHtml(matchGmtLabel(match))}</strong>
-      ${liveScoreMarkup(data.liveScore || match.liveScore, true)}
+      ${liveScoreMarkup(data.liveScore || match.liveScore, true, match)}
       ${score ? `
         <div class="score-prediction">
-          <span>Score Prediction</span>
+          <span>Prediction Experiment</span>
           <b>${escapeHtml(score.label)}</b>
-          <small>Experiment by QIP AI Learning Protocol</small>
         </div>
       ` : ""}
       <span>${escapeHtml(summary.venue || match.githubMatch?.stadium_name || "")}</span>
@@ -1585,12 +1646,11 @@ function renderMatchupLab(data) {
     <div class="match-center">
       <p class="eyebrow">Match Lab</p>
       <strong>${escapeHtml(match.home)} vs ${escapeHtml(match.away)}</strong>
-      ${liveScoreMarkup(data.liveScore, true)}
+      ${liveScoreMarkup(data.liveScore, true, match)}
       ${score ? `
         <div class="score-prediction">
-          <span>Score Prediction</span>
+          <span>Prediction Experiment</span>
           <b>${escapeHtml(score.label)}</b>
-          <small>Experiment by QIP AI Learning Protocol</small>
         </div>
       ` : ""}
       <span>${escapeHtml(summary.venue || "Neutral scenario")}</span>
@@ -1963,6 +2023,17 @@ function tickLiveTime() {
 }
 
 function bindEvents() {
+  $("#mobileMenuButton")?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleMobileMenu();
+  });
+  document.addEventListener("click", (event) => {
+    const nav = $(".nav-row");
+    if (nav?.classList.contains("open") && !nav.contains(event.target)) closeMobileMenu();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeMobileMenu();
+  });
   $$(".tab").forEach((tab) => {
     tab.addEventListener("click", () => switchView(tab.dataset.view));
   });
@@ -2018,6 +2089,7 @@ function bindEvents() {
 
 initializeTimeZoneControl();
 initializeDateControl();
+initializeActiveTabState();
 bindEvents();
 refreshAll();
 setInterval(tickLiveTime, 60000);

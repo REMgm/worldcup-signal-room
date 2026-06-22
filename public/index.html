@@ -41,7 +41,12 @@
       </header>
 
       <div class="nav-row">
-        <nav class="tabbar" aria-label="Dashboard views">
+        <button class="menu-toggle" id="mobileMenuButton" type="button" aria-label="Open dashboard menu" aria-controls="dashboardTabs" aria-expanded="false">
+          <span aria-hidden="true"></span>
+          <span aria-hidden="true"></span>
+          <span aria-hidden="true"></span>
+        </button>
+        <nav class="tabbar" id="dashboardTabs" aria-label="Dashboard views">
           <button class="tab active" data-view="overview" type="button">Today</button>
           <button class="tab" data-view="upcoming" type="button">Upcoming Matches</button>
           <button class="tab" data-view="signals" type="button">Signals</button>
