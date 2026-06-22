@@ -3,6 +3,7 @@ const state = {
   worldcup26: null,
   signalDay: null,
   signals: null,
+  upcoming: null,
   apiFootball: null,
   knockout: null,
   knockoutMode: "signal",
@@ -180,6 +181,12 @@ function matchGmtLabel(match) {
   return gmtObjectLabel(match?.gmt) || (match?.summary?.date ? formatGMT(match.summary.date) : `TBD ${activeTimeZoneLabel()}`);
 }
 
+function dateKeyLabel(key) {
+  const date = new Date(`${keyToInputDate(key)}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return String(key || "");
+  return `${date.getUTCDate()} ${GMT_MONTHS[date.getUTCMonth()]}`;
+}
+
 function dateKeyFromGame(game) {
   const value = String(game?.local_date || "");
   const match = value.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
@@ -335,6 +342,7 @@ function rerenderTimeSensitiveViews() {
   renderControls(selection);
   renderFixtures();
   renderTodayMatches();
+  if (state.upcoming) renderUpcomingMatches(state.upcoming);
   if (state.signals) renderSignals(state.signals);
   if (state.knockout) renderKnockout(state.knockout);
   if (state.teamRoom) renderTeamRoom(state.teamRoom);
@@ -505,6 +513,101 @@ function renderTodayMatches() {
     });
     return card;
   }));
+}
+
+function percentWeight(value) {
+  return `${Math.round(Number(value || 0) * 100)}%`;
+}
+
+function teamRankMarkup(name, rank) {
+  const rankText = rank ? `Pool ${rank.group} #${rank.rank}` : "Pool rank pending";
+  return `
+    <span class="ranked-team">
+      <b>${escapeHtml(name)}</b>
+      ${rank?.crowned ? `<span class="pool-crown" aria-label="current pool leader">♛</span>` : ""}
+      <small>${escapeHtml(rankText)}${rank ? ` · ${escapeHtml(rank.points)} pts` : ""}</small>
+    </span>
+  `;
+}
+
+function modelBlendMarkup(weights = {}) {
+  const rows = [
+    ["Market", weights.market],
+    ["Squad", weights.historicalSquad],
+    ["Live", weights.liveTournament],
+    ["Expert", weights.expertMedia]
+  ];
+  return rows.map(([label, value]) => `
+    <span>
+      <i style="width:${Math.max(4, Number(value || 0) * 100)}%"></i>
+      <b>${escapeHtml(label)}</b>
+      <em>${escapeHtml(percentWeight(value))}</em>
+    </span>
+  `).join("");
+}
+
+function renderUpcomingMatches(data) {
+  const weekNode = $("#upcomingWeek");
+  const rankNode = $("#poolRankings");
+  if (!weekNode || !rankNode) return;
+  if (!data) {
+    weekNode.innerHTML = `<div class="empty">Upcoming matches are loading.</div>`;
+    rankNode.innerHTML = `<div class="empty">Pool rankings are loading.</div>`;
+    return;
+  }
+  const matches = (data.week || []).flatMap((day) => day.matches || []);
+  $("#upcomingRange").textContent = `${dateKeyLabel(data.dateKey)} to ${dateKeyLabel(data.endDateKey)} · ${matches.length} scheduled matches`;
+  $("#upcomingKpis").innerHTML = [
+    statCard("Week Matches", matches.length, "scheduled"),
+    statCard("Pools", data.poolRankings?.groups?.length || 0, "ranked"),
+    statCard("QIP Lessons", data.qip?.lessonCount || 0, "result calls learned")
+  ].join("");
+
+  weekNode.innerHTML = (data.week || []).map((day) => `
+    <section class="upcoming-day">
+      <h3>${escapeHtml(dateKeyLabel(day.dateKey))}</h3>
+      ${(day.matches || []).length ? day.matches.map((match) => `
+        <article class="upcoming-match-card">
+          <div class="upcoming-match-head">
+            <span>${escapeHtml(match.group || "Match")}</span>
+            <strong>${escapeHtml(gmtObjectLabel(match.gmt) || `TBD ${activeTimeZoneLabel()}`)}</strong>
+          </div>
+          <div class="upcoming-teams">
+            ${teamRankMarkup(match.home, match.homeRank)}
+            <span class="vs-pill">vs</span>
+            ${teamRankMarkup(match.away, match.awayRank)}
+          </div>
+          <small>${escapeHtml([match.venue, match.city].filter(Boolean).join(" · "))}</small>
+          <div class="upcoming-call-grid">
+            <div class="result-call-card">
+              <span>Result Call</span>
+              <b>${escapeHtml(match.resultCall?.favorite || "TBD")}</b>
+              <strong>${escapeHtml(match.resultCall?.score || "Score TBA")}</strong>
+              <em>${escapeHtml(match.resultCall?.confidence || 0)} pts confidence · ${escapeHtml(match.resultCall?.probabilities?.home || 0)} / ${escapeHtml(match.resultCall?.probabilities?.draw || 0)} / ${escapeHtml(match.resultCall?.probabilities?.away || 0)}</em>
+            </div>
+            <div class="model-blend-card">
+              <span>Model Blend</span>
+              ${modelBlendMarkup(match.modelBlend?.weights)}
+            </div>
+          </div>
+          ${match.modelBlend?.edges?.length ? `<div class="upcoming-edges">${match.modelBlend.edges.slice(0, 2).map((edge) => `<p>${escapeHtml(edge)}</p>`).join("")}</div>` : ""}
+        </article>
+      `).join("") : `<div class="empty">No scheduled matches.</div>`}
+    </section>
+  `).join("");
+
+  rankNode.innerHTML = (data.poolRankings?.groups || []).map((group) => `
+    <article class="pool-table">
+      <h3>Pool ${escapeHtml(group.group)}</h3>
+      ${group.teams.map((team) => `
+        <div class="pool-row ${team.crowned ? "crowned" : ""}">
+          <span>${escapeHtml(team.rank)}</span>
+          <strong>${escapeHtml(team.team)}${team.crowned ? ` <i class="pool-crown" aria-label="current pool leader">♛</i>` : ""}</strong>
+          <em>${escapeHtml(team.points)} pts · ${escapeHtml(team.gd >= 0 ? `+${team.gd}` : team.gd)} GD · ${escapeHtml(team.played)} played</em>
+        </div>
+      `).join("")}
+    </article>
+  `).join("");
 }
 
 function renderImages(images = []) {
@@ -819,37 +922,104 @@ function renderSignals(data) {
   renderSignalTables(data);
 }
 
+function clientParseScore(value) {
+  const [home, away] = String(value || "0-0").split("-").map((part) => Number(part));
+  return [Number.isFinite(home) ? home : 0, Number.isFinite(away) ? away : 0];
+}
+
+function sportsIntelligenceSnapshot(data) {
+  const audit = state.signals?.audit || [];
+  const goals = audit.reduce((sum, row) => {
+    const [home, away] = clientParseScore(row.result);
+    return sum + home + away;
+  }, 0);
+  const highGoal = audit.filter((row) => clientParseScore(row.result).reduce((sum, value) => sum + value, 0) >= 4).length;
+  const draws = audit.filter((row) => row.actualOutcome === "draw").length;
+  const topPlayers = (state.squads?.teams || [])
+    .flatMap((team) => (team.players || []).map((player) => ({ ...player, team: team.team })))
+    .sort((a, b) => Number(b.goals || 0) - Number(a.goals || 0) || Number(b.caps || 0) - Number(a.caps || 0))
+    .slice(0, 5);
+  const leaders = (state.upcoming?.poolRankings?.groups || [])
+    .flatMap((group) => (group.teams || []).filter((team) => team.crowned).slice(0, 2))
+    .filter(Boolean)
+    .slice(0, 6);
+  const coverage = data?.coverage || [];
+  return {
+    audited: audit.length,
+    goals,
+    averageGoals: audit.length ? Number((goals / audit.length).toFixed(2)) : 0,
+    highGoalRate: audit.length ? Number((highGoal / audit.length * 100).toFixed(1)) : 0,
+    drawRate: audit.length ? Number((draws / audit.length * 100).toFixed(1)) : 0,
+    hitRate: state.signals?.summary?.hitRate || 0,
+    averageBrier: state.signals?.summary?.averageBrier || 0,
+    topPlayers,
+    leaders,
+    coverageEnabled: coverage.filter((item) => item.enabled).length,
+    coverageTotal: coverage.length,
+    apiStatus: data?.connected ? "Connected" : "Locked",
+    apiDetail: data?.lockedReason || data?.plan || data?.status || "unknown"
+  };
+}
+
 function renderApiFootball(data) {
   const node = $("#apiFootballVisuals");
   if (!node) return;
   if (!data) {
-    node.innerHTML = `<div class="empty">API-Sports intelligence is loading.</div>`;
+    node.innerHTML = `<div class="empty">Sports intelligence is loading.</div>`;
     return;
   }
+  const intel = sportsIntelligenceSnapshot(data);
   const endpointMax = Math.max(1, ...(data.endpoints || []).map((item) => Number(item.results || 0)));
   const coverage = data.coverage || [];
   const endpoints = data.endpoints || [];
-  const topScorers = data.examples?.topScorers || [];
-  const standings = data.examples?.standings || [];
   node.innerHTML = `
     <div class="api-football-summary">
       <article>
-        <span>Status</span>
-        <strong>${escapeHtml(data.connected ? "Connected" : "Locked")}</strong>
-        <small>${escapeHtml(data.plan || data.status || "unknown")}${data.lockedReason ? ` · ${escapeHtml(data.lockedReason)}` : ""}</small>
+        <span>Result Sample</span>
+        <strong>${escapeHtml(intel.audited)}</strong>
+        <small>${escapeHtml(intel.goals)} goals · ${escapeHtml(intel.averageGoals)} per match</small>
       </article>
       <article>
-        <span>2026 Coverage</span>
-        <strong>${escapeHtml(coverage.filter((item) => item.enabled).length)}/${escapeHtml(coverage.length)}</strong>
-        <small>Available once season access is unlocked</small>
+        <span>Model Accuracy</span>
+        <strong>${escapeHtml(intel.hitRate)}%</strong>
+        <small>Brier ${escapeHtml(intel.averageBrier)} · draw rate ${escapeHtml(intel.drawRate)}%</small>
       </article>
       <article>
-        <span>Fallback Sample</span>
-        <strong>${escapeHtml(data.fallbackSeason || "n/a")}</strong>
-        <small>Historical WORLDCUP calibration layer</small>
+        <span>API-Sports</span>
+        <strong>${escapeHtml(intel.apiStatus)}</strong>
+        <small>${escapeHtml(intel.coverageEnabled)}/${escapeHtml(intel.coverageTotal)} 2026 coverage flags · ${escapeHtml(intel.apiDetail)}</small>
       </article>
     </div>
-    <div class="api-football-grid">
+    <div class="sports-intel-grid">
+      <section>
+        <h3>Tournament Tempo</h3>
+        <p>${escapeHtml(intel.averageGoals)} goals per completed match with ${escapeHtml(intel.highGoalRate)}% of audited matches reaching four or more goals. That changes scoreline priors more than reputation does.</p>
+      </section>
+      <section>
+        <h3>Pool Pressure</h3>
+        <div class="api-standings-mini">
+          ${intel.leaders.map((row) => `
+            <article>
+              <b>${escapeHtml(row.group)} · ${escapeHtml(row.team)} <i class="pool-crown">♛</i></b>
+              <span>${escapeHtml(row.points)} pts · GD ${escapeHtml(row.gd >= 0 ? `+${row.gd}` : row.gd)} · ${escapeHtml(row.played)} played</span>
+            </article>
+          `).join("") || `<div class="empty">Pool leaders will appear after confirmed results.</div>`}
+        </div>
+      </section>
+      <section>
+        <h3>Player Leverage</h3>
+        <div class="api-scorers">
+          ${intel.topPlayers.map((player) => `
+            <article>
+              ${player.photo ? `<img src="${escapeHtml(player.photo)}" alt="">` : `<span class="player-mini">${escapeHtml(initials(player.shirtName || player.playerName))}</span>`}
+              <div>
+                <b>${escapeHtml(player.shirtName || player.playerName)}</b>
+                <span>${escapeHtml(player.team)} · ${escapeHtml(player.goals)} goals · ${escapeHtml(player.caps)} caps</span>
+              </div>
+            </article>
+          `).join("") || `<div class="empty">No official squad scoring sample available.</div>`}
+        </div>
+      </section>
       <section>
         <h3>Coverage Map</h3>
         <div class="coverage-pills">
@@ -866,33 +1036,6 @@ function renderApiFootball(data) {
               <strong>${escapeHtml(item.status === "locked" ? "locked" : item.results)}</strong>
             </div>
           `).join("")}
-        </div>
-      </section>
-      <section>
-        <h3>Historical Leaders</h3>
-        <div class="api-standings-mini">
-          ${standings.slice(0, 2).map((group) => `
-            <article>
-              <b>${escapeHtml(group.group || "Group")}</b>
-              ${(group.leaders || []).slice(0, 3).map((row) => `
-                <span>${escapeHtml(row.rank)}. ${escapeHtml(row.team)} <em>${escapeHtml(row.points)} pts · GD ${escapeHtml(row.goalDifference)}</em></span>
-              `).join("")}
-            </article>
-          `).join("") || `<div class="empty">No standings sample available.</div>`}
-        </div>
-      </section>
-      <section>
-        <h3>Finishing Signals</h3>
-        <div class="api-scorers">
-          ${topScorers.slice(0, 4).map((player) => `
-            <article>
-              ${player.photo ? `<img src="${escapeHtml(player.photo)}" alt="">` : ""}
-              <div>
-                <b>${escapeHtml(player.player)}</b>
-                <span>${escapeHtml(player.team)} · ${escapeHtml(player.goals)} goals${player.assists ? ` · ${escapeHtml(player.assists)} assists` : ""}</span>
-              </div>
-            </article>
-          `).join("") || `<div class="empty">No scorer sample available.</div>`}
         </div>
       </section>
     </div>
@@ -1127,6 +1270,33 @@ function renderFieldSetup(lineup, target) {
   `;
 }
 
+function renderGoalTimeline(summary, target, focusTeam = "") {
+  const node = $(target);
+  if (!node) return;
+  const goals = summary?.goals || [];
+  if (!goals.length) {
+    node.innerHTML = `<div class="empty">No scorer timeline is mapped for this match yet.</div>`;
+    return;
+  }
+  node.innerHTML = goals.map((goal) => {
+    const highlight = focusTeam && goal.team === focusTeam ? "focus" : "";
+    const details = [
+      goal.assist ? `Assist: ${goal.assist}` : "",
+      goal.penalty ? "Penalty" : "",
+      goal.ownGoal ? "Own goal" : ""
+    ].filter(Boolean).join(" · ");
+    return `
+      <article class="goal-event ${escapeHtml(goal.side || "")} ${highlight}">
+        <span>${escapeHtml(goal.minute || `${goal.minuteValue || ""}'`)}</span>
+        <div>
+          <strong>${escapeHtml(goal.scorer || "Unknown scorer")}</strong>
+          <small>${escapeHtml(goal.team || "")}${details ? ` · ${escapeHtml(details)}` : ""}</small>
+        </div>
+      </article>
+    `;
+  }).join("");
+}
+
 function renderNews(items, target) {
   const node = $(target);
   const list = items || [];
@@ -1239,6 +1409,7 @@ function renderTeamRoom(data) {
   ].join("");
 
   renderFieldSetup(data.liveSetup, "#teamLiveSetup");
+  renderGoalTimeline(match?.summary, "#teamScoringTimeline", data.team);
   $("#teamKitPanel").innerHTML = renderKitCard(data.liveSetup?.uniform, data.team, data.liveSetup?.formation ? `${data.liveSetup.formation} match setup colorway` : "No mapped match kit, generated fallback shown.");
 
   const positions = Object.entries(profile.positions || {}).map(([label, value]) => ({ label, value }));
@@ -1361,6 +1532,7 @@ function renderMatchRoom(data) {
 
   renderPrediction(data.prediction, match);
   renderComparison(data);
+  renderGoalTimeline(summary, "#matchScoringTimeline");
   renderPositionVisual(data, "#matchPositionMap");
   $("#uncommonInsights").innerHTML = (data.uncommonInsights || []).length
     ? data.uncommonInsights.map((item) => `<article>${escapeHtml(item)}</article>`).join("")
@@ -1629,6 +1801,13 @@ async function loadSignalDay(options = {}) {
 async function loadSignals(options = {}) {
   state.signals = await getJson(`/api/signals?date=${selectedDateKey()}`, options);
   renderSignals(state.signals);
+  if (state.apiFootball) renderApiFootball(state.apiFootball);
+}
+
+async function loadUpcomingMatches(options = {}) {
+  state.upcoming = await getJson(`/api/upcoming-matches?date=${selectedDateKey()}`, options);
+  renderUpcomingMatches(state.upcoming);
+  if (state.apiFootball) renderApiFootball(state.apiFootball);
 }
 
 async function loadApiFootball(options = {}) {
@@ -1670,6 +1849,7 @@ async function loadSquads(options = {}) {
   renderPlayersTable();
   renderTeamRoomControls(options.selection);
   renderMatchupControls(options.selection);
+  if (state.apiFootball) renderApiFootball(state.apiFootball);
 }
 
 async function loadMatchupLab(options = {}) {
@@ -1741,6 +1921,7 @@ async function refreshAll(options = {}) {
       loadSquads({ ...requestOptions, selection }),
       loadSignalDay({ ...requestOptions, selection }),
       loadSignals(requestOptions),
+      loadUpcomingMatches(requestOptions),
       loadApiFootball(requestOptions),
       loadKnockout(requestOptions)
     ]);
@@ -1775,6 +1956,7 @@ function initializeTimeZoneControl() {
 function tickLiveTime() {
   renderFixtures();
   renderTodayMatches();
+  if (state.upcoming) renderUpcomingMatches(state.upcoming);
   if (!$("#refreshButton")?.disabled && $("#refreshStatus")?.dataset.mode !== "error") {
     setStatus(refreshTimeLabel());
   }

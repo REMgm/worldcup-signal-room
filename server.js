@@ -273,6 +273,11 @@ function dashedFromRepoLocalDate(value) {
   return match ? `${match[3]}-${match[1]}-${match[2]}` : "";
 }
 
+function dateKeyFromRepoLocalDate(value) {
+  const dashed = dashedFromRepoLocalDate(value);
+  return dashed ? dashed.replaceAll("-", "") : "";
+}
+
 function americanToProbability(value) {
   const odds = Number(value);
   if (!Number.isFinite(odds) || odds === 0) return null;
@@ -1388,6 +1393,83 @@ function compactLineups(summary) {
   });
 }
 
+function clockMinuteValue(clock = {}) {
+  if (Number.isFinite(Number(clock.value))) return Math.round(Number(clock.value) / 60);
+  const display = String(clock.displayValue || "").match(/\d+/);
+  return display ? Number(display[0]) : 0;
+}
+
+function participantName(participant) {
+  return participant?.athlete?.displayName
+    || participant?.athlete?.shortName
+    || participant?.displayName
+    || participant?.name
+    || "";
+}
+
+function extractScoringTimeline(summary, homeName, awayName) {
+  const details = summary?.header?.competitions?.[0]?.details || [];
+  return details
+    .filter((detail) => detail?.scoringPlay)
+    .map((detail, index) => {
+      const team = detail.team?.displayName || detail.team?.name || "";
+      const side = teamKey(team) === teamKey(homeName)
+        ? "home"
+        : teamKey(team) === teamKey(awayName)
+          ? "away"
+          : "";
+      const scorer = participantName(detail.participants?.[0]) || "Unknown scorer";
+      const assist = participantName(detail.participants?.[1]);
+      return {
+        id: `${clockMinuteValue(detail.clock)}-${index}`,
+        minute: detail.clock?.displayValue || "",
+        minuteValue: clockMinuteValue(detail.clock),
+        addedTime: detail.addedClock?.displayValue || "",
+        team: side === "home" ? homeName : side === "away" ? awayName : team,
+        side,
+        scorer,
+        assist,
+        penalty: Boolean(detail.penaltyKick),
+        ownGoal: Boolean(detail.ownGoal),
+        source: "ESPN match details"
+      };
+    })
+    .sort((a, b) => a.minuteValue - b.minuteValue);
+}
+
+function parseArchiveScorers(value, team, side) {
+  const raw = String(value || "").trim();
+  if (!raw || /^null$/i.test(raw)) return [];
+  return raw
+    .split(/[,;]/)
+    .map((entry, index) => {
+      const minuteMatch = entry.match(/(\d{1,3}(?:\+\d{1,2})?)\s*'?/);
+      const minute = minuteMatch ? `${minuteMatch[1]}'` : "";
+      const scorer = entry.replace(/(\d{1,3}(?:\+\d{1,2})?)\s*'?/g, "").trim() || "Unknown scorer";
+      return {
+        id: `${side}-${index}`,
+        minute,
+        minuteValue: minuteMatch ? Number(minuteMatch[1].split("+")[0]) : index + 1,
+        addedTime: "",
+        team,
+        side,
+        scorer,
+        assist: "",
+        penalty: /\bpen\b/i.test(entry),
+        ownGoal: /\bog\b|own goal/i.test(entry),
+        source: "Signal Room result archive"
+      };
+    })
+    .filter((item) => item.scorer || item.minute);
+}
+
+function archiveScoringTimeline(game) {
+  return [
+    ...parseArchiveScorers(game?.home_scorers, game?.home_team_name_en, "home"),
+    ...parseArchiveScorers(game?.away_scorers, game?.away_team_name_en, "away")
+  ].sort((a, b) => a.minuteValue - b.minuteValue);
+}
+
 function compactSummary(summary) {
   if (!summary?.header) return null;
   const competition = summary.header.competitions?.[0] || {};
@@ -1444,6 +1526,7 @@ function compactSummary(summary) {
     standings: summary.standings || null,
     leaders: summary.leaders || [],
     lineups: compactLineups(summary),
+    goals: extractScoringTimeline(summary, homeName, awayName),
     news: summary.news?.articles?.slice(0, 6).map((article) => ({
       headline: article.headline,
       description: article.description,
@@ -1608,6 +1691,7 @@ function summaryFromGameResult(game) {
     standings: null,
     leaders: [],
     lineups: [],
+    goals: archiveScoringTimeline(game),
     news: [],
     videos: [],
     archivedResult: true
@@ -1650,6 +1734,7 @@ function compactScoreboardSummary(event) {
     standings: null,
     leaders: [],
     lineups: [],
+    goals: extractScoringTimeline({ header: { competitions: [competition] } }, teamBlock(home).name, teamBlock(away).name),
     news: [],
     videos: []
   };
@@ -2143,6 +2228,126 @@ function sortedGroupRows(groupMap) {
     || b.gf - a.gf
     || a.team.localeCompare(b.team)
   );
+}
+
+function fixtureSourceDateKey(game) {
+  return dateKeyFromRepoLocalDate(game?.local_date) || gameDateKey(game);
+}
+
+function buildPoolRankings(games = [], dateKey = todayDateKey()) {
+  const table = new Map();
+  const groupGames = games.filter((item) => item.type === "group" && knownFixture(item));
+  for (const game of groupGames) {
+    if (!table.has(game.group)) table.set(game.group, new Map());
+    const groupTable = table.get(game.group);
+    for (const team of [game.home_team_name_en, game.away_team_name_en]) {
+      if (!groupTable.has(teamKey(team))) groupTable.set(teamKey(team), emptyStanding(team, game.group));
+    }
+    if (fixtureSourceDateKey(game) <= dateKey && gameHasFinalResult(game)) {
+      addStandingResult(
+        table,
+        game.group,
+        game.home_team_name_en,
+        game.away_team_name_en,
+        Number(game.home_score || 0),
+        Number(game.away_score || 0),
+        game.result_source || "Final result"
+      );
+    }
+  }
+
+  const groups = [...table.entries()].sort(([a], [b]) => String(a).localeCompare(String(b))).map(([group, groupTable]) => {
+    const rows = sortedGroupRows(groupTable);
+    const hasConfirmedResult = rows.some((row) => row.played > 0);
+    return {
+      group,
+      teams: rows.map((row, index) => ({
+        ...row,
+        rank: index + 1,
+        crowned: hasConfirmedResult && index < 2 && row.played > 0
+      }))
+    };
+  });
+  const rankByTeam = Object.fromEntries(groups.flatMap((group) =>
+    group.teams.map((row) => [teamKey(row.team), {
+      group: group.group,
+      rank: row.rank,
+      crowned: row.crowned,
+      points: row.points,
+      gd: row.gd,
+      played: row.played
+    }])
+  ));
+  return { groups, rankByTeam };
+}
+
+function addDaysToDateKey(dateKey, days) {
+  let current = dateKey;
+  for (let index = 0; index < days; index += 1) current = nextDateKey(current);
+  return current;
+}
+
+async function buildUpcomingMatches(dateKey = todayDateKey()) {
+  const [worldcupRepo, squads] = await Promise.all([getWorldcupRepoData(), getSquads()]);
+  const qipState = await getQipState(dateKey).catch(() => null);
+  const games = (worldcupRepo.games || []).filter(knownFixture);
+  const endDateKey = addDaysToDateKey(dateKey, 6);
+  const poolRankings = buildPoolRankings(games, dateKey);
+  const days = dateKeyRange(dateKey, endDateKey).map((key) => ({ dateKey: key, matches: [] }));
+  const dayMap = new Map(days.map((day) => [day.dateKey, day]));
+
+  for (const game of games) {
+    const sourceDate = fixtureSourceDateKey(game);
+    if (sourceDate < dateKey || sourceDate > endDateKey || gameHasFinalResult(game)) continue;
+    const { match, prediction } = signalPredictionForGame(game, squads, null, qipState);
+    const predictedOutcome = predictionOutcome(prediction, match);
+    const homeRank = poolRankings.rankByTeam[teamKey(match.home)] || null;
+    const awayRank = poolRankings.rankByTeam[teamKey(match.away)] || null;
+    dayMap.get(sourceDate)?.matches.push({
+      id: game.id,
+      dateKey: sourceDate,
+      gmt: game.gmt,
+      group: game.group || game.type || "Group",
+      venue: game.stadium_name || "",
+      city: game.city_en || "",
+      home: match.home,
+      away: match.away,
+      homeRank,
+      awayRank,
+      resultCall: {
+        favorite: outcomeLabel(predictedOutcome, match),
+        outcome: predictedOutcome,
+        score: prediction.scorePrediction.shortLabel,
+        confidence: prediction.confidence,
+        probabilities: prediction.probabilities,
+        expectedGoals: prediction.scorePrediction.expectedGoals
+      },
+      modelBlend: {
+        label: prediction.label,
+        weights: prediction.components?.weights || {},
+        edges: prediction.edges || []
+      }
+    });
+  }
+
+  for (const day of days) {
+    day.matches.sort((a, b) => String(a.gmt?.iso || "").localeCompare(String(b.gmt?.iso || "")));
+  }
+
+  return {
+    fetchedAt: new Date().toISOString(),
+    dateKey,
+    endDateKey,
+    source: ["rezarahiminia/worldcup2026", "Signal Room result archive", "FIFA squad PDF", "QIP-calibrated prediction model"],
+    poolRankings,
+    week: days,
+    qip: qipState ? {
+      lessonCount: qipState.lessonCount,
+      hitRate: qipState.hitRate || 0,
+      confidenceMultiplier: qipState.confidenceMultiplier,
+      drawLift: qipState.drawLift
+    } : null
+  };
 }
 
 function predictionForTeams(home, away, game, squads, qipState) {
@@ -3219,6 +3424,13 @@ async function handleApi(req, res, url) {
       const dateKey = normalizeDateKey(url.searchParams.get("date"));
       const signals = await buildSignals(dateKey);
       jsonResponse(res, 200, signals);
+      return;
+    }
+
+    if (url.pathname === "/api/upcoming-matches") {
+      const dateKey = normalizeDateKey(url.searchParams.get("date"));
+      const upcoming = await buildUpcomingMatches(dateKey);
+      jsonResponse(res, 200, upcoming);
       return;
     }
 

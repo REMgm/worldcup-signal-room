@@ -43,6 +43,7 @@
       <div class="nav-row">
         <nav class="tabbar" aria-label="Dashboard views">
           <button class="tab active" data-view="overview" type="button">Today</button>
+          <button class="tab" data-view="upcoming" type="button">Upcoming Matches</button>
           <button class="tab" data-view="signals" type="button">Signals</button>
           <button class="tab" data-view="team-room" type="button">Team Room</button>
           <button class="tab" data-view="match-room" type="button">Match Room</button>
@@ -122,6 +123,38 @@
           </section>
         </section>
 
+        <section class="view" id="upcoming">
+          <section class="panel upcoming-hero">
+            <div>
+              <p class="eyebrow">Seven-Day Outlook</p>
+              <h2>Upcoming Matches</h2>
+              <p id="upcomingRange">Week overview loading</p>
+            </div>
+            <div class="upcoming-kpis" id="upcomingKpis"></div>
+          </section>
+
+          <section class="upcoming-layout">
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Week Schedule</h2>
+                  <p>Result calls and model blend side by side</p>
+                </div>
+              </div>
+              <div id="upcomingWeek" class="upcoming-week"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Pool Rankings</h2>
+                  <p>Current group table from confirmed results</p>
+                </div>
+              </div>
+              <div id="poolRankings" class="pool-ranking-grid"></div>
+            </div>
+          </section>
+        </section>
+
         <section class="view" id="signals">
           <section class="signals-hero panel">
             <div>
@@ -165,8 +198,8 @@
           <section class="panel api-football-panel">
             <div class="panel-header">
               <div>
-                <h2>API-Sports Intelligence</h2>
-                <p>API-Football v3 WORLDCUP coverage and prediction leverage</p>
+                <h2>Sports Intelligence</h2>
+                <p>Tournament results, squad signals, and API-Sports coverage leverage</p>
               </div>
             </div>
             <div id="apiFootballVisuals" class="api-football-visuals"></div>
@@ -241,6 +274,15 @@
             <div class="panel">
               <div class="panel-header">
                 <div>
+                  <h2>Scoring Timeline</h2>
+                  <p>Goals, minutes, and assists</p>
+                </div>
+              </div>
+              <div id="teamScoringTimeline" class="goal-timeline"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-header">
+                <div>
                   <h2>Team Outfit</h2>
                   <p>Match kit colorway</p>
                 </div>
@@ -310,6 +352,15 @@
                 </div>
               </div>
               <div id="comparisonBars" class="comparison-bars"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Scoring Timeline</h2>
+                  <p>Goals, minutes, and assists</p>
+                </div>
+              </div>
+              <div id="matchScoringTimeline" class="goal-timeline"></div>
             </div>
             <div class="panel">
               <div class="panel-header">
