@@ -1866,6 +1866,18 @@ th[data-active="asc"]::after {
   line-height: 1.15;
 }
 
+.bracket-prediction small,
+.bracket-prediction em {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-style: normal;
+  line-height: 1.25;
+}
+
+.bracket-prediction em {
+  color: var(--soft);
+}
+
 .bracket-score {
   justify-self: start;
   min-height: 24px;

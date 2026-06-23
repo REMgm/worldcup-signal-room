@@ -756,11 +756,15 @@ function knockoutTeamSource(text) {
 function knockoutPredictionMarkup(match) {
   if (!match.prediction) return "";
   const probabilities = match.prediction.probabilities || {};
+  const advancement = match.prediction.advancement || {};
+  const media = match.prediction.media || {};
   return `
     <div class="bracket-prediction">
-      <span>Signal pick</span>
+      <span>${advancement.overridden ? "QIP recalibrated pick" : "Signal pick"}</span>
       <strong>${escapeHtml(match.prediction.favorite || "TBD")} ${escapeHtml(match.prediction.score || "")}</strong>
       <small>${escapeHtml(match.prediction.confidence || 0)} pts · ${escapeHtml(probabilities.home || 0)} / ${escapeHtml(probabilities.draw || 0)} / ${escapeHtml(probabilities.away || 0)}</small>
+      ${media.noteCount ? `<small>Media pulse: ${escapeHtml(media.leanLabel || "No clear lean")} · ${escapeHtml(media.noteCount)} notes</small>` : ""}
+      ${advancement.reason ? `<em>${escapeHtml(advancement.reason)}</em>` : ""}
     </div>
   `;
 }
